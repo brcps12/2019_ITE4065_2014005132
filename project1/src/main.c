@@ -18,8 +18,8 @@ typedef unsigned long long llu;
 #define RECORD_THRESHOLD 200000LL
 
 #define NUM_OF_THREADS 80
-
-#define MEMSIZ 1 * 1024 * 1024 * 1024 // 1 GB
+#define NUM_RECORDS_FOR_MERGE 100000
+#define MEMSIZ 850 * 1024 * 1024
 
 typedef struct record_t {
     byte key[NB_KEY];
@@ -150,7 +150,8 @@ void partially_sort(byte *mem, int input_fd, off_t offset) {
     record_t *buf = (record_t*)(mem + record_offset * sizeof(record_t));
     size_t records = read_records(input_fd, offset, buf, RECORD_THRESHOLD);
     
-    partially_quicksort(buf, 0, records - 1);
+    qsort(buf, records, sizeof(record_t), compare);
+    // partially_quicksort(buf, 0, records - 1);
 }
 
 void merge(byte *mem, byte *mem2, off_t start, off_t mid, off_t end) {
@@ -174,6 +175,37 @@ void merge(byte *mem, byte *mem2, off_t start, off_t mid, off_t end) {
     while (r <= end) {
         out[i++] = in[r++];
     }
+}
+
+void flush_buf(int output_fd, off_t *offset, byte *buf, byte **ptr) {
+    pwrite(output_fd, buf, *ptr - buf, *offset);
+    *ptr = buf;
+    *offset = *offset + (*ptr - buf) * NB_RECORD;
+}
+
+void append_record(int output_fd, off_t *offset, byte *buf, size_t bufsiz, byte **ptr, byte *record) {
+    memcpy(*ptr, record, NB_RECORD);
+    *ptr = *ptr + NB_RECORD;
+    
+    if (buf + bufsiz <= *ptr) {
+        flush_buf(output_fd, offset, buf, ptr);
+    }
+}
+
+void file_merge(byte *mem, int input_fd, int output_fd, off_t start, off_t end, record_t *records) {
+    size_t bufsiz = NUM_RECORDS_FOR_MERGE * NB_RECORD;
+    byte *buf = mem + omp_get_thread_num() * bufsiz;
+    byte *ptr = buf;
+    byte record[NB_RECORD];
+    off_t offset = start * NB_RECORD;
+
+    for (size_t i = start; i < end; i++) {
+        memcpy(record, records[i].key, NB_KEY);
+        pread(input_fd, record + NB_KEY, NB_PAYLOAD, records[i].offset * NB_RECORD + NB_KEY);
+        append_record(output_fd, &offset, buf, bufsiz, &ptr, record);
+    }
+
+    flush_buf(output_fd, &offset, buf, &ptr);
 }
 
 int main(int argc, char* argv[]) {
@@ -206,9 +238,13 @@ int main(int argc, char* argv[]) {
         return -1;
     }
 
+    size_t siz1 = NB_RECORD * NUM_RECORDS_FOR_MERGE * NUM_OF_THREADS;
+    size_t siz2 = num_records * sizeof(record_t);
     byte *mem[2];
-    mem[0] = (byte*)malloc(num_records * sizeof(record_t));
-    mem[1] = (byte*)malloc(num_records * sizeof(record_t));
+    // mem[0] = (byte*)malloc(num_records * sizeof(record_t));
+    // mem[1] = (byte*)malloc(num_records * sizeof(record_t));
+    mem[0] = (byte*)malloc(siz1 > siz2 ? siz1 : siz2);
+    mem[1] = (byte*)malloc(siz1 > siz2 ? siz1 : siz2);
 
     // set empty content (also used to save temporary data)
     // pwrite(output_fd, "\0", 1, file_size * 2 - 1);
@@ -245,14 +281,10 @@ int main(int argc, char* argv[]) {
 
     // rearrage records
     record_t *records = (record_t*)mem[k];
+    off_t off;
     #pragma omp parallel for
-    for (size_t i = 0; i < num_records; i++) {
-        int fd = open(argv[2], O_RDWR);
-        byte *buf = mem[k ^ 1] + omp_get_thread_num() * NB_RECORD;
-        memcpy(buf, records[i].key, NB_KEY);
-        pread(input_fd, buf + NB_KEY, NB_PAYLOAD, records[i].offset * NB_RECORD + NB_KEY);
-        pwrite(fd, buf, NB_RECORD, i * NB_RECORD);
-        close(fd);
+    for (off_t i = 0; i < num_records; i += NUM_RECORDS_FOR_MERGE) {
+        file_merge(mem[k ^ 1], input_fd, output_fd, i, i + NUM_RECORDS_FOR_MERGE >= num_records ? num_records : i + NUM_RECORDS_FOR_MERGE, records);
     }
     
     free(mem[0]);
