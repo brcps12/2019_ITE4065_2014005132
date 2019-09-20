@@ -15,7 +15,7 @@ typedef unsigned long long llu;
 #define NB_PAYLOAD 90
 #define NB_RECORD 100 // NB_KEY + NB_PAYLOAD
 
-#define RECORD_THRESHOLD 4LL
+#define RECORD_THRESHOLD 200000LL
 
 #define NUM_OF_THREADS 80
 
