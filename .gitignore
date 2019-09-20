@@ -1,2 +1,5 @@
 exec/**/*
 !exec/.gitkeep
+
+# ignore link files
+/**/*.o
