@@ -3,3 +3,7 @@ exec/**/*
 
 # ignore link files
 /**/*.o
+
+# ignore IDE configurations
+.idea
+.vscode
