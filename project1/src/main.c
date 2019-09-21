@@ -6,65 +6,82 @@
 #include <fcntl.h>
 #include <memory.h>
 #include <assert.h>
+#include <string.h>
+#include <algorithm>
+
+#define max(a, b) ((a) > (b) ? (a) : (b))
+#define min(a, b) ((a) < (b) ? (a) : (b))
+
+#define KB ((size_t)(1024))
+#define MB ((size_t)(1024 * KB))
+#define GB ((size_t)(1024 * MB))
+
+#define NB_KEY (10) 
+#define NB_PAYLOAD (90)
+#define NB_RECORD (100)
+
+#define RECORD_THRESHOLD 200000
+
+#define NUM_OF_THREADS (80)
+// It can be set in dynamically: currently 80% of total(=2g)
+#define MAX_MEMSIZ_FOR_DATA ((size_t)(0.76 * 2 * GB))
+#define MAX_RECORD_NUM ((size_t)(MEMSIZ_FOR_DATA / NB_RECORD))
+#define INPUT_BUFSIZ (64 * MB)
+#define OUTPUT_BUFSIZ (64 * MB)
+
+#define TMPFILE_NAME "tmp.%d"
 
 // type definitions
-typedef unsigned char byte;
+typedef char byte;
+typedef byte rec_payload_t[NB_PAYLOAD];
+typedef byte rec_key_t[NB_KEY];
 typedef unsigned long long llu;
 
-#define NB_KEY 10
-#define NB_PAYLOAD 90
-#define NB_RECORD 100 // NB_KEY + NB_PAYLOAD
-
-#define RECORD_THRESHOLD 200000LL
-
-#define NUM_OF_THREADS 80
-#define NUM_RECORDS_FOR_MERGE 100000
-#define MEMSIZ 850 * 1024 * 1024
-
-typedef struct record_t {
-    byte key[NB_KEY];
-    off_t offset
+typedef struct {
+    rec_key_t key;
+    rec_payload_t payload;
 } record_t;
 
-void swap(record_t *a, record_t *b) {
-    record_t t = *a;
-    *a = *b;
-    *b = t;
-}
+typedef struct {
+    rec_key_t key;
+    off_t idx;
+} comp_record_t;
 
-int compare(record_t *a, record_t *b) {
+typedef struct {
+    off_t start_idx;
+    record_t *buf;
+} record_buffer_t;
+
+FILE *fin;
+FILE *fout;
+
+size_t record_buf_size;
+size_t file_size, total_records;
+
+byte *inbuf[2];
+byte *outbuf;
+record_t *record_buf;
+off_t *record_offs;
+
+FILE **tmpfiles;
+
+int compare_record(const record_t *a, const record_t *b) {
     return memcmp(a, b, NB_KEY);
-
-    // llu *ak = (llu*)(a->key), *bk = (llu*)(b->key);
-    // short *as = (short*)(a->key + 8), *bs = (short*)(b->key + 8);
-    // if (*ak < *bk) {
-    //     return -1;
-    // } else if (*ak > *bk) {
-    //     return 1;
-    // } else {
-    //     if (*as < *bs) {
-    //         return -1;
-    //     } else if (*as > *bs) {
-    //         return 1;
-    //     }
-    // }
-
-    // return 0;
 }
 
-size_t read_records(int input_fd, off_t offset, record_t *buf, size_t records) {
-    for (off_t i = offset, k = 0; i < offset + records * NB_RECORD; i += NB_RECORD, k++) {
-        if (pread(input_fd, buf + k, NB_KEY, i) == 0) {
-            return k;
-        }
-
-        (buf + k)->offset = i / NB_RECORD;
-    }
-
-    return records;
+int compare(const off_t *a, const off_t *b) {
+    return compare_record(record_buf + *a, record_buf + *b);
 }
 
-size_t print_key(record_t *record) {
+int compare_for_sort(const off_t &a, const off_t &b) {
+    return compare_record(record_buf + a, record_buf + b) < 0;
+}
+
+int compare_record_for_sort(const record_t &a, const record_t &b) {
+    return compare_record(&a, &b) < 0;
+}
+
+void print_key(record_t *record) {
     char buf[22] = {0, };
     char *str = "0123456789ABCDEF";
     for (int i = 0; i < NB_KEY; i++) {
@@ -74,223 +91,323 @@ size_t print_key(record_t *record) {
     printf("%s\n", buf);
 }
 
-// void merge_inmemory(off_t start, off_t mid, off_t end, data_type *records) {
-//     off_t l = start, r = mid + 1, k = 0;
-//     data_type *buf = (data_type*)malloc((end - start + 1) * sizeof(data_type));
-//     while (l <= mid && r <= end) {
-//         int res = cmp_record(records + l, records + r);
-//         if (res < 0) {
-//             buf[k] = records[l];
-//             ++l;
-//         } else {
-//             buf[k] = records[r];
-//             ++r;
-//         }
-//         ++k;
-//     }
+void print_records() {
+    for (off_t i = 0; i < total_records; i++) {
+        print_key(record_buf + i);
+    }
+}
 
-//     while (l <= mid) {
-//         buf[k] = records[l];
-//         ++l, ++k;
-//     }
+void swap(void **a, void **b) {
+    void *tmp = *a;
+    *a = *b;
+    *b = tmp;
+}
 
-//     while (r <= end) {
-//         buf[k] = records[r];
-//         ++r, ++k;
-//     }
-
-//     memcpy(records + start, buf, (end - start + 1) * LEN_RECORD);
-//     free(buf);
-// }
+size_t read_records(FILE *in, void *buf, size_t len) {
+    return fread(buf, NB_RECORD, len, in);
+}
 
 void partially_partition(record_t *records, off_t start, off_t end, off_t *i, off_t *j) {
     if (end - start <= 1) {
-        if (compare(&records[start], &records[end]) > 0) {
-            swap(&records[start], &records[end]);
+        if (compare_record(&records[start], &records[end]) > 0) {
+            std::swap(records[start], records[end]);
         }
-
         *i = start,
         *j = end;
         return;
     }
-
     off_t it = start;
     record_t pivot = records[start]; // todo: optimize
-
     while (it <= end) {
-        int cmp = compare(&records[it], &pivot);
+        int cmp = compare_record(&records[it], &pivot);
         if (cmp < 0) {
-            swap(&records[start], &records[it]);
+            std::swap(records[start], records[it]);
             ++start, ++it;
         } else if (cmp == 0) {
             ++it;
         } else {
-            swap(&records[it], &records[end]);
+            std::swap(records[it], records[end]);
             --end;
         }
     }
-
     *i = start - 1;
     *j = it;
 }
 
 void partially_quicksort(record_t *records, off_t start, off_t end) {
     if (start >= end) return;
-
     off_t i, j; 
     
     partially_partition(records, start, end, &i, &j);
-
     partially_quicksort(records, start, i);
     partially_quicksort(records, j, end);
 }
 
-void partially_sort(byte *mem, int input_fd, off_t offset) {
-    off_t record_offset = offset / NB_RECORD;
-    record_t *buf = (record_t*)(mem + record_offset * sizeof(record_t));
-    size_t records = read_records(input_fd, offset, buf, RECORD_THRESHOLD);
-    
-    qsort(buf, records, sizeof(record_t), compare);
-    // partially_quicksort(buf, 0, records - 1);
+void read_and_sort(off_t start, size_t len) {
+    len = read_records(fin, record_buf + start, len);
+    for (off_t i = start; i < start + len; i++) {
+        record_offs[i] = i;
+    }
+    // std::sort(record_offs + start, record_offs + start + len, compare_for_sort);
+    // std::sort(record_buf + start, record_buf + start + len, compare_record_for_sort);
+    // qsort(record_buf + start, len, sizeof(record_t), compare_record);
+    qsort(record_offs + start, len, sizeof(off_t), compare);
+    // partially_quicksort(record_buf, start, start + len - 1);
 }
 
-void merge(byte *mem, byte *mem2, off_t start, off_t mid, off_t end) {
-    record_t *in = (record_t*)mem, *out = (record_t*)mem2;
-    
+void twoway_merge(off_t *offin, off_t *offout, off_t start, off_t mid, off_t end) {
     off_t l = start, r = mid + 1, i = start;
 
     while (l <= mid && r <= end) {
-        int res = compare(in + l, in + r);
+        int res = compare(offin + l, offin + r);
         if (res < 0) {
-            out[i++] = in[l++];
+            offout[i++] = offin[l++];
         } else {
-            out[i++] = in[r++];
+            offout[i++] = offin[r++];
         }
     }
 
     while (l <= mid) {
-        out[i++] = in[l++];
+        offout[i++] = offin[l++];
     }
 
     while (r <= end) {
-        out[i++] = in[r++];
+        offout[i++] = offin[r++];
     }
 }
 
-void flush_buf(int output_fd, off_t *offset, byte *buf, byte **ptr) {
-    pwrite(output_fd, buf, *ptr - buf, *offset);
-    *ptr = buf;
-    *offset = *offset + (*ptr - buf) * NB_RECORD;
-}
+void partial_sort(FILE *out, size_t num_records) {
+    #pragma omp parallel for
+    for (off_t start = 0; start < num_records; start += RECORD_THRESHOLD) {
+        size_t len = start + RECORD_THRESHOLD > num_records ? num_records - start : RECORD_THRESHOLD;
+        read_and_sort(start, len);
+    }
 
-void append_record(int output_fd, off_t *offset, byte *buf, size_t bufsiz, byte **ptr, byte *record) {
-    memcpy(*ptr, record, NB_RECORD);
-    *ptr = *ptr + NB_RECORD;
+    off_t *offin = record_offs, *offout = record_offs + num_records;
+    for (size_t mlen = RECORD_THRESHOLD; mlen < num_records; mlen <<= 1) {
+        #pragma omp parallel for
+        for (off_t start = 0; start < num_records; start += (mlen << 1)) {
+            off_t end = start + (mlen << 1) - 1;
+            off_t mid = start + mlen - 1;
+            if (mid >= num_records) {
+                mid = end = num_records - 1;
+            } else if (end >= num_records) {
+                end = num_records - 1;
+            }
+
+            twoway_merge(offin, offout, start, mid, end);
+        }
+
+        swap((void**)&offin, (void**)&offout);
+    }
     
-    if (buf + bufsiz <= *ptr) {
-        flush_buf(output_fd, offset, buf, ptr);
+    for (off_t i = 0; i < num_records; i ++) {
+        off_t idx = offin[i];
+        fwrite(record_buf + idx, NB_RECORD, 1, out);
     }
+
+    fflush(out);
 }
 
-void file_merge(byte *mem, int input_fd, int output_fd, off_t start, off_t end, record_t *records) {
-    size_t bufsiz = NUM_RECORDS_FOR_MERGE * NB_RECORD;
-    byte *buf = mem + omp_get_thread_num() * bufsiz;
-    byte *ptr = buf;
-    byte record[NB_RECORD];
-    off_t offset = start * NB_RECORD;
-
-    for (size_t i = start; i < end; i++) {
-        memcpy(record, records[i].key, NB_KEY);
-        pread(input_fd, record + NB_KEY, NB_PAYLOAD, records[i].offset * NB_RECORD + NB_KEY);
-        append_record(output_fd, &offset, buf, bufsiz, &ptr, record);
+record_t *get_next_record(FILE *in, record_t *buf, record_t **ptr, size_t bufsiz, size_t *remain) {
+    if (*remain == 0) {
+        if (feof(in)) return NULL;
+        *remain = read_records(in, buf, bufsiz / NB_RECORD);
+        *ptr = buf;
     }
 
-    flush_buf(output_fd, &offset, buf, &ptr);
+    --*remain;
+    *ptr += 1;
+    return *ptr - 1;
+}
+
+void external_merge(FILE *fin_left, FILE *fin_right, FILE *fout) {
+    // simple
+    size_t bufsiz = record_buf_size / (NB_RECORD * 2);
+    size_t lremain = 0, rremain = 0;
+    record_t *lbuf = record_buf, *rbuf = record_buf + bufsiz;
+    record_t *lp = NULL, *rp = NULL;
+    record_t *l = get_next_record(fin_left, lbuf, &lp, bufsiz, &lremain);
+    record_t *r = get_next_record(fin_right, rbuf, &rp, bufsiz, &rremain);
+    
+    // record_t prev, cur;
+    // size_t it = 0;
+    while (l && r) {
+        // prev = cur;
+        if (compare_record(l, r) < 0) {
+            fwrite(l, NB_RECORD, 1, fout);
+            // cur = *l;
+            l = get_next_record(fin_left, lbuf, &lp, bufsiz, &lremain);
+        } else {
+            fwrite(r, NB_RECORD, 1, fout);
+            // cur = *r;
+            r = get_next_record(fin_right, rbuf, &rp, bufsiz, &rremain);
+        }
+        // ++it;
+
+        // if (it > 1) {
+            // assert(compare_record(&prev, &cur) <= 0);
+        // }
+    }
+
+    while (l) {
+        // prev = cur;
+        fwrite(l, NB_RECORD, 1, fout);
+        // cur = *l;
+        l = get_next_record(fin_left, lbuf, &lp, bufsiz, &lremain);
+        // ++it;
+
+        // if (it > 1) {
+            // assert(compare_record(&prev, &cur) <= 0);
+        // }
+    }
+
+    while (r) {
+        // prev = cur;
+        fwrite(r, NB_RECORD, 1, fout);
+        // cur = *r;
+        r = get_next_record(fin_right, rbuf, &rp, bufsiz, &rremain);
+        // ++it;
+
+        // if (it > 1) {
+            // assert(compare_record(&prev, &cur) <= 0);
+        // }
+    }
+
+    fflush(fout);
 }
 
 int main(int argc, char* argv[]) {
-    srand(time(NULL));
-
     if (argc < 3) {
         printf("usage: %s <path to input> <path to output>\n", argv[0]);
         return 0;
     }
 
+#ifdef LOCAL_TEST
+    printf("This runs in local test only\n");
+    char *num_thread = getenv("MP_NUM_OF_THREAD");
+    omp_set_num_threads(atoi(num_thread));
+#else
     omp_set_num_threads(NUM_OF_THREADS);
+#endif
 
-    // #pragma omp parallel
-    // initiate_thread(&global_state[omp_get_thread_num()]);
-    
-    // printf("The number of threads: %d\n", omp_get_num_threads());
+    inbuf[0] = (byte*)malloc(INPUT_BUFSIZ);
+    inbuf[1] = (byte*)malloc(INPUT_BUFSIZ);
+    outbuf = (byte*)malloc(OUTPUT_BUFSIZ);
 
-    int input_fd = open(argv[1], O_RDONLY);
-    if (input_fd == -1) {
+    fin = fopen(argv[1], "rb");
+    if (fin == NULL) {
         printf("error: cannot open file\n");
         return -1;
     }
+    setvbuf(fin, inbuf[0], _IOFBF, INPUT_BUFSIZ);
 
-    size_t file_size = lseek(input_fd, 0, SEEK_END);
-    size_t num_records = file_size / NB_RECORD;
+    fseeko(fin, 0, SEEK_END);
+    file_size = ftello(fin);
+    rewind(fin);
+    total_records = file_size / NB_RECORD;
 
-    int output_fd = open(argv[2], O_RDWR | O_CREAT | O_TRUNC, 0777);
-    if (output_fd == -1) {
+    fout = fopen(argv[2], "wb+");
+    if (fout == NULL) {
         printf("error: cannot create output file\n");
         return -1;
     }
+    setvbuf(fout, outbuf, _IOFBF, OUTPUT_BUFSIZ);
 
-    size_t siz1 = NB_RECORD * NUM_RECORDS_FOR_MERGE * NUM_OF_THREADS;
-    size_t siz2 = num_records * sizeof(record_t);
-    byte *mem[2];
-    // mem[0] = (byte*)malloc(num_records * sizeof(record_t));
-    // mem[1] = (byte*)malloc(num_records * sizeof(record_t));
-    mem[0] = (byte*)malloc(siz1 > siz2 ? siz1 : siz2);
-    mem[1] = (byte*)malloc(siz1 > siz2 ? siz1 : siz2);
+    record_buf_size = total_records * NB_RECORD > MAX_MEMSIZ_FOR_DATA ? MAX_MEMSIZ_FOR_DATA : total_records * NB_RECORD;
+    record_buf = (record_t*)malloc(record_buf_size);
 
-    // set empty content (also used to save temporary data)
-    // pwrite(output_fd, "\0", 1, file_size * 2 - 1);
-
-    #pragma omp parallel for
-    for (size_t offset = 0; offset < file_size; offset += RECORD_THRESHOLD * NB_RECORD) {
-        partially_sort(mem[0], input_fd, offset);
+    size_t num_record_for_partition = record_buf_size / NB_RECORD;
+    size_t num_partition = total_records / num_record_for_partition;
+    if (total_records % num_record_for_partition != 0) {
+        ++num_partition;
     }
+    record_offs = (off_t*)malloc(2 * num_record_for_partition * sizeof(off_t));
 
-    // off_t base_offset = 0;
-    // for (size_t mlen = RECORD_THRESHOLD << 1; mlen < num_records; mlen <<= 1) {
-    //     base_offset ^= (size_t)file_size;
-    // }
+    if (num_partition <= 1) {
+        partial_sort(fout, total_records);
+    } else {
+        tmpfiles = (FILE **)malloc(2 * num_partition * sizeof(FILE*));
+        char name[15];
+        for (int i = 0; i < 2 * num_partition; i++) {
+            sprintf(name, TMPFILE_NAME, i);
+            tmpfiles[i] = fopen(name, "wb+");
+        }
 
-    int k = 0;
-    for (size_t mlen = RECORD_THRESHOLD; mlen < num_records; mlen <<= 1, k ^= 1) {
-        #pragma omp parallel for
-        for (off_t start = 0; start < num_records; start += (mlen << 1)) {
-            off_t end = num_records <= start + (mlen << 1) ? num_records - 1 : start + (mlen << 1) - 1;
-            
-            if (end - start < mlen) {
-                memcpy(mem[k ^ 1] + start * sizeof(record_t), mem[k] + start * sizeof(record_t), (end - start + 1) * sizeof(record_t));
-                continue;
-            };
+        int tidx = 0;
+        for (off_t offset = 0; offset < total_records; offset += num_record_for_partition, ++tidx) {
+            size_t num_records = min(offset + num_record_for_partition, total_records) - offset;
+            partial_sort(tmpfiles[tidx], num_records);
+        }
 
-            merge(mem[k], mem[k ^ 1], start, start + mlen - 1, end);
+        size_t partition = num_partition;
+        int fpm[2][partition];
+        int k = 0, l = 0;
+
+        for (int i = 0; i < partition; i++) {
+            fpm[0][i] = i, fpm[1][i] = i + partition;
+        }
+
+        while (partition) {
+            int oi = 0;
+            for (int i = partition - 1; i >= 0; i -= 2, ++oi) {
+                FILE *pfin_left, *pfin_right, *pfout;
+
+                if (i == 0) {
+                    swap((void**)&fpm[k ^ 1][oi], (void**)&fpm[k][i]);
+                    continue;
+                }
+
+                pfin_left = tmpfiles[fpm[k][i - 1]];
+                pfin_right = tmpfiles[fpm[k][i]];
+
+                if (partition == 2) {
+                    pfout = fout;
+                } else {
+                    pfout = tmpfiles[fpm[k ^ 1][oi]];
+                }
+
+                // printf("partition: %d, i: %d, left_file: %d, right_file: %d, out_file: %d, oi: %d\n", partition, i, fpm[k][i - 1], fpm[k][i], fpm[k ^ 1][oi], oi);
+
+                fseeko(pfin_left, 0, SEEK_END);
+                fseeko(pfin_right, 0, SEEK_END);
+                size_t len_left = ftello(pfin_left), len_right = ftello(pfin_right);
+                
+                rewind(pfin_left);
+                rewind(pfin_right);
+                rewind(pfout);
+
+                setvbuf(pfin_left, inbuf[0], _IOFBF, INPUT_BUFSIZ);
+                setvbuf(pfin_right, inbuf[1], _IOFBF, INPUT_BUFSIZ);
+                setvbuf(pfout, outbuf, _IOFBF, OUTPUT_BUFSIZ);
+                external_merge(pfin_left, pfin_right, pfout);
+            }
+
+            if (partition == 2) break;
+
+            k ^= 1;
+            partition = partition / 2 + (partition & 1);
         }
     }
 
-    // for (size_t offset = 1; offset < num_records; offset++) {
-    //     record_t *tt = mem2;
-    //     assert(compare(tt + offset - 1, tt + offset) <= 0);
-    // }
-
-    // rearrage records
-    record_t *records = (record_t*)mem[k];
-    off_t off;
-    #pragma omp parallel for
-    for (off_t i = 0; i < num_records; i += NUM_RECORDS_FOR_MERGE) {
-        file_merge(mem[k ^ 1], input_fd, output_fd, i, i + NUM_RECORDS_FOR_MERGE >= num_records ? num_records : i + NUM_RECORDS_FOR_MERGE, records);
+    if (num_partition > 1) {
+        char name[15];
+        for (off_t i = 0; i < 2 * num_partition; i++) {
+            sprintf(name, TMPFILE_NAME, i);
+            fclose(tmpfiles[i]);
+            remove(name);
+        }
+        free(tmpfiles);
     }
-    
-    free(mem[0]);
-    free(mem[1]);
-    close(input_fd);
-    close(output_fd);
+
+    fclose(fin);
+    fclose(fout);
+
+    free(inbuf[0]);
+    free(inbuf[1]);
+    free(outbuf);
+    free(record_buf);
+    free(record_offs);
 
     return 0;
 }

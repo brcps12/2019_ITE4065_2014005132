@@ -1,7 +1,7 @@
 # Compiler and Compile options.
-CC = gcc
-CFLAGS = -Wall -O2
-#CFLAGS = -Wall -g
+CC = g++
+#CFLAGS = -Wall -O2
+CFLAGS = -Wall -g
 
 # Macros specifying path for compile.
 SRCS := $(wildcard src/*.c)
@@ -10,7 +10,7 @@ INC = ./include/
 LIB = ./lib/
 
 # Pre-Processor.
-CFLAGS += -I$(INC) -L$(LIB) -lpthread -fopenmp
+CFLAGS += -I$(INC) -L$(LIB) -lpthread -fopenmp --std=c++11
 
 
 TARGET = run
