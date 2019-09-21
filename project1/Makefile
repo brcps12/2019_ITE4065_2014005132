@@ -1,7 +1,7 @@
 # Compiler and Compile options.
-CC = g++
-#CFLAGS = -Wall -O2
-CFLAGS = -Wall -g
+CC = gcc
+CFLAGS = -Wall -O2
+# CFLAGS = -Wall -g
 
 # Macros specifying path for compile.
 SRCS := $(wildcard src/*.c)

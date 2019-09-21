@@ -7,7 +7,7 @@
 #include <memory.h>
 #include <assert.h>
 #include <string.h>
-#include <algorithm>
+// #include <algorithm>
 
 #define max(a, b) ((a) > (b) ? (a) : (b))
 #define min(a, b) ((a) < (b) ? (a) : (b))
@@ -73,13 +73,13 @@ int compare(const off_t *a, const off_t *b) {
     return compare_record(record_buf + *a, record_buf + *b);
 }
 
-int compare_for_sort(const off_t &a, const off_t &b) {
-    return compare_record(record_buf + a, record_buf + b) < 0;
-}
+// int compare_for_sort(const off_t &a, const off_t &b) {
+//     return compare_record(record_buf + a, record_buf + b) < 0;
+// }
 
-int compare_record_for_sort(const record_t &a, const record_t &b) {
-    return compare_record(&a, &b) < 0;
-}
+// int compare_record_for_sort(const record_t &a, const record_t &b) {
+//     return compare_record(&a, &b) < 0;
+// }
 
 void print_key(record_t *record) {
     char buf[22] = {0, };
@@ -107,41 +107,41 @@ size_t read_records(FILE *in, void *buf, size_t len) {
     return fread(buf, NB_RECORD, len, in);
 }
 
-void partially_partition(record_t *records, off_t start, off_t end, off_t *i, off_t *j) {
-    if (end - start <= 1) {
-        if (compare_record(&records[start], &records[end]) > 0) {
-            std::swap(records[start], records[end]);
-        }
-        *i = start,
-        *j = end;
-        return;
-    }
-    off_t it = start;
-    record_t pivot = records[start]; // todo: optimize
-    while (it <= end) {
-        int cmp = compare_record(&records[it], &pivot);
-        if (cmp < 0) {
-            std::swap(records[start], records[it]);
-            ++start, ++it;
-        } else if (cmp == 0) {
-            ++it;
-        } else {
-            std::swap(records[it], records[end]);
-            --end;
-        }
-    }
-    *i = start - 1;
-    *j = it;
-}
+// void partially_partition(record_t *records, off_t start, off_t end, off_t *i, off_t *j) {
+//     if (end - start <= 1) {
+//         if (compare_record(&records[start], &records[end]) > 0) {
+//             std::swap(records[start], records[end]);
+//         }
+//         *i = start,
+//         *j = end;
+//         return;
+//     }
+//     off_t it = start;
+//     record_t pivot = records[start]; // todo: optimize
+//     while (it <= end) {
+//         int cmp = compare_record(&records[it], &pivot);
+//         if (cmp < 0) {
+//             std::swap(records[start], records[it]);
+//             ++start, ++it;
+//         } else if (cmp == 0) {
+//             ++it;
+//         } else {
+//             std::swap(records[it], records[end]);
+//             --end;
+//         }
+//     }
+//     *i = start - 1;
+//     *j = it;
+// }
 
-void partially_quicksort(record_t *records, off_t start, off_t end) {
-    if (start >= end) return;
-    off_t i, j; 
+// void partially_quicksort(record_t *records, off_t start, off_t end) {
+//     if (start >= end) return;
+//     off_t i, j; 
     
-    partially_partition(records, start, end, &i, &j);
-    partially_quicksort(records, start, i);
-    partially_quicksort(records, j, end);
-}
+//     partially_partition(records, start, end, &i, &j);
+//     partially_quicksort(records, start, i);
+//     partially_quicksort(records, j, end);
+// }
 
 void read_and_sort(off_t start, size_t len) {
     len = read_records(fin, record_buf + start, len);
