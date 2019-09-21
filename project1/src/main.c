@@ -24,7 +24,7 @@
 
 #define NUM_OF_THREADS (80)
 // It can be set in dynamically: currently 80% of total(=2g)
-#define MAX_MEMSIZ_FOR_DATA ((size_t)(0.76 * 2 * GB))
+#define MAX_MEMSIZ_FOR_DATA ((size_t)(0.7 * 2 * GB))
 #define MAX_RECORD_NUM ((size_t)(MEMSIZ_FOR_DATA / NB_RECORD))
 #define INPUT_BUFSIZ (64 * MB)
 #define OUTPUT_BUFSIZ (64 * MB)
