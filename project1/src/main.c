@@ -7,7 +7,10 @@
 #include <memory.h>
 #include <assert.h>
 #include <string.h>
-// #include <algorithm>
+#include <sys/time.h>
+#include <queue>
+#include <algorithm>
+#include "time_chk.h"
 
 #define max(a, b) ((a) > (b) ? (a) : (b))
 #define min(a, b) ((a) < (b) ? (a) : (b))
@@ -20,7 +23,7 @@
 #define NB_PAYLOAD (90)
 #define NB_RECORD (100)
 
-#define RECORD_THRESHOLD 200000
+#define RECORD_THRESHOLD 100000
 
 #define NUM_OF_THREADS (80)
 // It can be set in dynamically: currently 80% of total(=2g)
@@ -63,19 +66,20 @@ byte *outbuf;
 record_t *record_buf;
 off_t *record_offs;
 
+int input_fd;
 FILE **tmpfiles;
 
 int compare_record(const record_t *a, const record_t *b) {
     return memcmp(a, b, NB_KEY);
 }
 
-int compare(const off_t *a, const off_t *b) {
-    return compare_record(record_buf + *a, record_buf + *b);
+int compare(const void *a, const void *b) {
+    return compare_record(record_buf + *(off_t*)a, record_buf + *(off_t*)b);
 }
 
-// int compare_for_sort(const off_t &a, const off_t &b) {
-//     return compare_record(record_buf + a, record_buf + b) < 0;
-// }
+int compare_for_sort(const off_t &a, const off_t &b) {
+    return compare_record(record_buf + a, record_buf + b) < 0;
+}
 
 // int compare_record_for_sort(const record_t &a, const record_t &b) {
 //     return compare_record(&a, &b) < 0;
@@ -83,7 +87,7 @@ int compare(const off_t *a, const off_t *b) {
 
 void print_key(record_t *record) {
     char buf[22] = {0, };
-    char *str = "0123456789ABCDEF";
+    const char *str = "0123456789ABCDEF";
     for (int i = 0; i < NB_KEY; i++) {
         buf[2 * i + 1] = str[record->key[i] & 15];
         buf[2 * i] = str[(record->key[i] >> 4) & 15];
@@ -144,14 +148,20 @@ size_t read_records(FILE *in, void *buf, size_t len) {
 // }
 
 void read_and_sort(off_t start, size_t len) {
+    time_interval_t tin;
+    begin_time_track(&tin);
     len = read_records(fin, record_buf + start, len);
     for (off_t i = start; i < start + len; i++) {
         record_offs[i] = i;
     }
+    stop_and_print_interval(&tin, "Read");
+
     // std::sort(record_offs + start, record_offs + start + len, compare_for_sort);
     // std::sort(record_buf + start, record_buf + start + len, compare_record_for_sort);
     // qsort(record_buf + start, len, sizeof(record_t), compare_record);
+    begin_time_track(&tin);
     qsort(record_offs + start, len, sizeof(off_t), compare);
+    stop_and_print_interval(&tin, "QSort");
     // partially_quicksort(record_buf, start, start + len - 1);
 }
 
@@ -177,36 +187,44 @@ void twoway_merge(off_t *offin, off_t *offout, off_t start, off_t mid, off_t end
 }
 
 void partial_sort(FILE *out, size_t num_records) {
-    #pragma omp parallel for
-    for (off_t start = 0; start < num_records; start += RECORD_THRESHOLD) {
-        size_t len = start + RECORD_THRESHOLD > num_records ? num_records - start : RECORD_THRESHOLD;
-        read_and_sort(start, len);
-    }
-
-    off_t *offin = record_offs, *offout = record_offs + num_records;
-    for (size_t mlen = RECORD_THRESHOLD; mlen < num_records; mlen <<= 1) {
-        #pragma omp parallel for
-        for (off_t start = 0; start < num_records; start += (mlen << 1)) {
-            off_t end = start + (mlen << 1) - 1;
-            off_t mid = start + mlen - 1;
-            if (mid >= num_records) {
-                mid = end = num_records - 1;
-            } else if (end >= num_records) {
-                end = num_records - 1;
-            }
-
-            twoway_merge(offin, offout, start, mid, end);
-        }
-
-        swap((void**)&offin, (void**)&offout);
-    }
+    time_interval_t tin;
+    begin_time_track(&tin);
+    // #pragma omp parallel for
+    // for (off_t start = 0; start < num_records; start += RECORD_THRESHOLD) {
+    //     size_t len = start + RECORD_THRESHOLD > num_records ? num_records - start : RECORD_THRESHOLD;
+    //     read_and_sort(start, len);
+    // }
+    read_and_sort(0, num_records);
+    stop_and_print_interval(&tin, "Sort");
     
+    begin_time_track(&tin);
+    off_t *offin = record_offs, *offout = record_offs + num_records;
+    // for (size_t mlen = RECORD_THRESHOLD; mlen < num_records; mlen <<= 1) {
+    //     #pragma omp parallel for
+    //     for (off_t start = 0; start < num_records; start += (mlen << 1)) {
+    //         off_t end = start + (mlen << 1) - 1;
+    //         off_t mid = start + mlen - 1;
+    //         if (mid >= num_records) {
+    //             mid = end = num_records - 1;
+    //         } else if (end >= num_records) {
+    //             end = num_records - 1;
+    //         }
+
+    //         twoway_merge(offin, offout, start, mid, end);
+    //     }
+
+    //     swap((void**)&offin, (void**)&offout);
+    // }
+    stop_and_print_interval(&tin, "Merge");
+    
+    begin_time_track(&tin);
     for (off_t i = 0; i < num_records; i ++) {
         off_t idx = offin[i];
         fwrite(record_buf + idx, NB_RECORD, 1, out);
     }
 
     fflush(out);
+    stop_and_print_interval(&tin, "File write");
 }
 
 record_t *get_next_record(FILE *in, record_t *buf, record_t **ptr, size_t bufsiz, size_t *remain) {
@@ -223,6 +241,9 @@ record_t *get_next_record(FILE *in, record_t *buf, record_t **ptr, size_t bufsiz
 
 void external_merge(FILE *fin_left, FILE *fin_right, FILE *fout) {
     // simple
+    time_interval_t tin;
+    begin_time_track(&tin);
+
     size_t bufsiz = record_buf_size / (NB_RECORD * 2);
     size_t lremain = 0, rremain = 0;
     record_t *lbuf = record_buf, *rbuf = record_buf + bufsiz;
@@ -273,8 +294,9 @@ void external_merge(FILE *fin_left, FILE *fin_right, FILE *fout) {
             // assert(compare_record(&prev, &cur) <= 0);
         // }
     }
-
+    
     fflush(fout);
+    stop_and_print_interval(&tin, "External Merge");
 }
 
 int main(int argc, char* argv[]) {
@@ -294,6 +316,8 @@ int main(int argc, char* argv[]) {
     inbuf[0] = (byte*)malloc(INPUT_BUFSIZ);
     inbuf[1] = (byte*)malloc(INPUT_BUFSIZ);
     outbuf = (byte*)malloc(OUTPUT_BUFSIZ);
+
+    input_fd = open(argv[1], O_RDONLY);
 
     fin = fopen(argv[1], "rb");
     if (fin == NULL) {
@@ -326,6 +350,8 @@ int main(int argc, char* argv[]) {
 
     if (num_partition <= 1) {
         partial_sort(fout, total_records);
+            setvbuf(fin, NULL, _IONBF, 0);
+    fclose(fin);
     } else {
         tmpfiles = (FILE **)malloc(2 * num_partition * sizeof(FILE*));
         char name[15];
@@ -339,6 +365,8 @@ int main(int argc, char* argv[]) {
             size_t num_records = min(offset + num_record_for_partition, total_records) - offset;
             partial_sort(tmpfiles[tidx], num_records);
         }
+        setvbuf(fin, NULL, _IONBF, 0);
+    fclose(fin);
 
         size_t partition = num_partition;
         int fpm[2][partition];
@@ -390,18 +418,24 @@ int main(int argc, char* argv[]) {
         }
     }
 
+    time_interval_t tin;
+    begin_time_track(&tin);
     if (num_partition > 1) {
         char name[15];
         for (off_t i = 0; i < 2 * num_partition; i++) {
             sprintf(name, TMPFILE_NAME, i);
+            setvbuf(tmpfiles[i], NULL, _IONBF, 0);
             fclose(tmpfiles[i]);
             remove(name);
         }
         free(tmpfiles);
     }
+    stop_and_print_interval(&tin, "Flush File");
 
-    fclose(fin);
+    begin_time_track(&tin);
+    setvbuf(fout, NULL, _IONBF, 0);
     fclose(fout);
+    stop_and_print_interval(&tin, "Flush File");
 
     free(inbuf[0]);
     free(inbuf[1]);
