@@ -10,6 +10,7 @@
 #include <queue>
 #include <algorithm>
 #include <vector>
+#include <sys/mman.h>
 
 #include <time_chk.h>
 #include <mytypes.h>
@@ -236,11 +237,12 @@ void partial_sort(buffered_io_fd *out, off_t offset, size_t num_records) {
     //     size_t maxlen = start + RECORD_THRESHOLD >= num_records ? num_records - start : RECORD_THRESHOLD;
     //     read_and_sort(start, offset, maxlen);
     // }
-    #pragma omp parallel for
-    for (off_t start = 0; start < num_records; start += READ_THRESHOLD) {
-        size_t maxlen = start + READ_THRESHOLD >= num_records ? num_records - start : READ_THRESHOLD;
-        pread(input_fd, record_buf + start, maxlen * NB_RECORD, (offset + start) * NB_RECORD);
-    }
+    // #pragma omp parallel for
+    // for (off_t start = 0; start < num_records; start += READ_THRESHOLD) {
+    //     size_t maxlen = start + READ_THRESHOLD >= num_records ? num_records - start : READ_THRESHOLD;
+    //     pread(input_fd, record_buf + start, maxlen * NB_RECORD, (offset + start) * NB_RECORD);
+    // }
+    record_t *buf = (record_t*)mmap(0, num_records * NB_RECORD, PROT_READ | PROT_WRITE, MAP_PRIVATE, input_fd, offset);
     // pread(input_fd, record_buf, num_records * NB_RECORD, offset * NB_RECORD);
     stop_and_print_interval(&tin, "All Read");
     begin_time_track(&tin);
@@ -248,7 +250,7 @@ void partial_sort(buffered_io_fd *out, off_t offset, size_t num_records) {
     {
         #pragma omp single nowait
         {
-            partially_quicksort(record_buf, 0, num_records - 1);
+            partially_quicksort(buf, 0, num_records - 1);
         }
     }
     stop_and_print_interval(&tin, "All Partially Sorted");
@@ -286,7 +288,8 @@ void partial_sort(buffered_io_fd *out, off_t offset, size_t num_records) {
     //     size_t maxlen = start + RECORD_THRESHOLD >= num_records ? num_records - start : RECORD_THRESHOLD;
     //     pwrite(out->fd, record_buf + start, maxlen * NB_RECORD, (offset + start) * NB_RECORD);
     // }
-    pwrite(out->fd, record_buf, num_records * NB_RECORD, 0);
+    pwrite(out->fd, buf, num_records * NB_RECORD, 0);
+    printf("mulmap: %d\n", munmap(buf, num_records * NB_RECORD));
     stop_and_print_interval(&tin, "File write");
 }
 
