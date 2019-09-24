@@ -19,10 +19,11 @@
 #define max(a, b) ((a) > (b) ? (a) : (b))
 #define min(a, b) ((a) < (b) ? (a) : (b))
 
-#define RECORD_THRESHOLD 100000
+#define RECORD_THRESHOLD 1000000
+#define SORT_THRESHOLD 100000
 #define READ_THRESHOLD 10000
 
-#define NUM_OF_THREADS (1)
+#define NUM_OF_THREADS (40)
 // It can be set in dynamically: currently 80% of total(=2g)
 #define MAX_MEMSIZ_FOR_DATA ((size_t)(0.9 * 2 * GB))
 // #define MAX_MEMSIZ_FOR_DATA ((size_t)(300 * MB))
@@ -143,7 +144,7 @@ void partially_partition(record_t *records, off_t start, off_t end, off_t *i, of
 }
 
 void partially_quicksort(record_t *records, off_t start, off_t end) {
-    if (end - start <= RECORD_THRESHOLD) {
+    if (end - start <= SORT_THRESHOLD) {
         std::sort(records + start, records + end + 1, record_comparison);
     } else {
         if (start >= end) return;
@@ -228,10 +229,25 @@ void kway_merge(buffered_io_fd *out, record_t *rin, size_t buflen, off_t k, off_
     }
 }
 
+void parallel_quicksort(record_t *records, off_t start, off_t end) {
+    #pragma omp parallel
+    {
+        #pragma omp single nowait
+        {
+            partially_quicksort(records, start, end);
+        }
+    }
+}
+
 void partial_sort(buffered_io_fd *out, off_t offset, size_t num_records) {
     time_interval_t tin;
     begin_time_track(&tin);
-    // #pragma omp parallel for
+    #pragma omp parallel for
+    for (off_t start = 0; start < num_records; start += RECORD_THRESHOLD) {
+        size_t maxlen = start + RECORD_THRESHOLD >= num_records ? num_records - start : RECORD_THRESHOLD;
+        pread(input_fd, record_buf + start, maxlen * NB_RECORD, (offset + start) * NB_RECORD);
+        parallel_quicksort(record_buf + start, 0, maxlen - 1);
+    }
     // for (off_t start = 0; start < num_records; start += RECORD_THRESHOLD) {
     //     size_t maxlen = start + RECORD_THRESHOLD >= num_records ? num_records - start : RECORD_THRESHOLD;
     //     read_and_sort(start, offset, maxlen);
@@ -241,16 +257,16 @@ void partial_sort(buffered_io_fd *out, off_t offset, size_t num_records) {
     //     size_t maxlen = start + READ_THRESHOLD >= num_records ? num_records - start : READ_THRESHOLD;
     //     pread(input_fd, record_buf + start, maxlen * NB_RECORD, (offset + start) * NB_RECORD);
     // }
-    pread(input_fd, record_buf, num_records * NB_RECORD, offset * NB_RECORD);
-    stop_and_print_interval(&tin, "All Read");
-    begin_time_track(&tin);
-    #pragma omp parallel
-    {
-        #pragma omp single nowait
-        {
-            partially_quicksort(record_buf, 0, num_records - 1);
-        }
-    }
+    // pread(input_fd, record_buf, num_records * NB_RECORD, offset * NB_RECORD);
+    // stop_and_print_interval(&tin, "All Read");
+    // begin_time_track(&tin);
+    // #pragma omp parallel
+    // {
+    //     #pragma omp single nowait
+    //     {
+    //         partially_quicksort(record_buf, 0, num_records - 1);
+    //     }
+    // }
     stop_and_print_interval(&tin, "All Partially Sorted");
     
     begin_time_track(&tin);
@@ -271,7 +287,7 @@ void partial_sort(buffered_io_fd *out, off_t offset, size_t num_records) {
 
     //     swap((void**)&offin, (void**)&offout);
     // }
-    // kway_merge(out, record_buf, num_records, k, RECORD_THRESHOLD);
+    kway_merge(out, record_buf, num_records, k, RECORD_THRESHOLD);
     stop_and_print_interval(&tin, "Merge");
     
     begin_time_track(&tin);
@@ -280,13 +296,13 @@ void partial_sort(buffered_io_fd *out, off_t offset, size_t num_records) {
     //     fwrite(record_buf + idx, NB_RECORD, 1, out);
     // }
 
-    // buffered_flush(out);
+    buffered_flush(out);
     // #pragma omp parallel for
     // for (off_t start = 0; start < num_records; start += RECORD_THRESHOLD) {
     //     size_t maxlen = start + RECORD_THRESHOLD >= num_records ? num_records - start : RECORD_THRESHOLD;
     //     pwrite(out->fd, record_buf + start, maxlen * NB_RECORD, (offset + start) * NB_RECORD);
     // }
-    pwrite(out->fd, record_buf, num_records * NB_RECORD, 0);
+    // pwrite(out->fd, record_buf, num_records * NB_RECORD, 0);
     stop_and_print_interval(&tin, "File write");
 }
 
