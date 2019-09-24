@@ -19,9 +19,9 @@
 #define max(a, b) ((a) > (b) ? (a) : (b))
 #define min(a, b) ((a) < (b) ? (a) : (b))
 
-#define RECORD_THRESHOLD 1000000
+#define RECORD_THRESHOLD 100000
 
-#define NUM_OF_THREADS (80)
+#define NUM_OF_THREADS (160)
 // It can be set in dynamically: currently 80% of total(=2g)
 #define MAX_MEMSIZ_FOR_DATA ((size_t)(0.9 * 2 * GB))
 // #define MAX_MEMSIZ_FOR_DATA ((size_t)(300 * MB))
@@ -241,6 +241,8 @@ void partial_sort(buffered_io_fd *out, off_t offset, size_t num_records) {
     //     pread(input_fd, record_buf + start, maxlen * NB_RECORD, (offset + start) * NB_RECORD);
     // }
     pread(input_fd, record_buf, num_records * NB_RECORD, offset * NB_RECORD);
+    stop_and_print_interval(&tin, "All Read");
+    begin_time_track(&tin);
     #pragma omp parallel
     {
         #pragma omp single nowait
