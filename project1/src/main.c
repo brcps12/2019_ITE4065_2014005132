@@ -22,7 +22,7 @@
 #define RECORD_THRESHOLD 100000
 #define READ_THRESHOLD 10000
 
-#define NUM_OF_THREADS (40)
+#define NUM_OF_THREADS (1)
 // It can be set in dynamically: currently 80% of total(=2g)
 #define MAX_MEMSIZ_FOR_DATA ((size_t)(0.9 * 2 * GB))
 // #define MAX_MEMSIZ_FOR_DATA ((size_t)(300 * MB))
