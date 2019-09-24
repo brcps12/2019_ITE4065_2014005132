@@ -22,14 +22,14 @@
 #define RECORD_THRESHOLD 100000
 #define READ_THRESHOLD 10000
 
-#define NUM_OF_THREADS (160)
+#define NUM_OF_THREADS (40)
 // It can be set in dynamically: currently 80% of total(=2g)
 #define MAX_MEMSIZ_FOR_DATA ((size_t)(0.9 * 2 * GB))
 // #define MAX_MEMSIZ_FOR_DATA ((size_t)(300 * MB))
 // #define MAX_MEMSIZ_FOR_DATA ((size_t)(200))
 #define MAX_RECORD_NUM ((size_t)(MEMSIZ_FOR_DATA / NB_RECORD))
-#define INPUT_BUFSIZ (64 * MB)
-#define OUTPUT_BUFSIZ (64 * MB)
+#define INPUT_BUFSIZ (128 * MB)
+#define OUTPUT_BUFSIZ (128 * MB)
 
 #define TMPFILE_NAME "tmp.%d"
 
