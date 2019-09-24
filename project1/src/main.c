@@ -4,59 +4,42 @@
 #include <unistd.h>
 #include <sys/types.h>
 #include <fcntl.h>
-#include <memory.h>
 #include <assert.h>
 #include <string.h>
 #include <sys/time.h>
 #include <queue>
 #include <algorithm>
-#include "time_chk.h"
+#include <vector>
+
+#include <time_chk.h>
+#include <mytypes.h>
+#include <heap.h>
+#include <buffered_io.h>
 
 #define max(a, b) ((a) > (b) ? (a) : (b))
 #define min(a, b) ((a) < (b) ? (a) : (b))
-
-#define KB ((size_t)(1024))
-#define MB ((size_t)(1024 * KB))
-#define GB ((size_t)(1024 * MB))
-
-#define NB_KEY (10) 
-#define NB_PAYLOAD (90)
-#define NB_RECORD (100)
 
 #define RECORD_THRESHOLD 100000
 
 #define NUM_OF_THREADS (80)
 // It can be set in dynamically: currently 80% of total(=2g)
 #define MAX_MEMSIZ_FOR_DATA ((size_t)(0.7 * 2 * GB))
+// #define MAX_MEMSIZ_FOR_DATA ((size_t)(300 * MB))
+// #define MAX_MEMSIZ_FOR_DATA ((size_t)(200))
 #define MAX_RECORD_NUM ((size_t)(MEMSIZ_FOR_DATA / NB_RECORD))
 #define INPUT_BUFSIZ (64 * MB)
 #define OUTPUT_BUFSIZ (64 * MB)
 
 #define TMPFILE_NAME "tmp.%d"
 
-// type definitions
-typedef char byte;
-typedef byte rec_payload_t[NB_PAYLOAD];
-typedef byte rec_key_t[NB_KEY];
-typedef unsigned long long llu;
-
 typedef struct {
-    rec_key_t key;
-    rec_payload_t payload;
-} record_t;
+    record_t *record;
+    off_t k;
+} heap_item_t;
 
-typedef struct {
-    rec_key_t key;
-    off_t idx;
-} comp_record_t;
-
-typedef struct {
-    off_t start_idx;
-    record_t *buf;
-} record_buffer_t;
-
-FILE *fin;
-FILE *fout;
+int input_fd;
+buffered_io_fd *fout;
+// FILE *fout;
 
 size_t record_buf_size;
 size_t file_size, total_records;
@@ -64,11 +47,22 @@ size_t file_size, total_records;
 byte *inbuf[2];
 byte *outbuf;
 record_t *record_buf;
-off_t *record_offs;
 
-int input_fd;
-FILE **tmpfiles;
+buffered_io_fd **tmpfiles;
+// FILE **tmpfiles;
 
+bool record_comparison(record_t &a, record_t &b) {
+    return memcmp(&a, &b, NB_KEY) < 0;
+}
+
+class heap_comparison {
+public:
+    bool operator() (const heap_item_t &a, const heap_item_t &b) {
+        return memcmp(a.record, b.record, NB_KEY) > 0;
+    }
+};
+
+/*
 int compare_record(const record_t *a, const record_t *b) {
     return memcmp(a, b, NB_KEY);
 }
@@ -77,13 +71,18 @@ int compare(const void *a, const void *b) {
     return compare_record(record_buf + *(off_t*)a, record_buf + *(off_t*)b);
 }
 
-int compare_for_sort(const off_t &a, const off_t &b) {
-    return compare_record(record_buf + a, record_buf + b) < 0;
+int compare_heap_item(const heap_item_t &a, const heap_item_t &b) {
+    return compare_record(a.record, b.record);
 }
 
-// int compare_record_for_sort(const record_t &a, const record_t &b) {
-//     return compare_record(&a, &b) < 0;
-// }
+int compare_for_sort(const off_t *a, const off_t *b) {
+    return compare_record(record_buf + *a, record_buf + *b) < 0;
+}
+
+int compare_record_for_sort(const record_t &a, const record_t &b) {
+    return compare_record(&a, &b) < 0;
+}
+*/
 
 void print_key(record_t *record) {
     char buf[22] = {0, };
@@ -147,58 +146,76 @@ size_t read_records(FILE *in, void *buf, size_t len) {
 //     partially_quicksort(records, j, end);
 // }
 
-void read_and_sort(off_t start, size_t len) {
+void read_and_sort(off_t start, off_t offset, size_t maxlen) {
     time_interval_t tin;
     begin_time_track(&tin);
-    len = read_records(fin, record_buf + start, len);
-    for (off_t i = start; i < start + len; i++) {
-        record_offs[i] = i;
-    }
+    // len = read_records(fin, record_buf + start, len);
+    size_t readbytes = pread(input_fd, record_buf + start, maxlen * NB_RECORD, (offset + start) * NB_RECORD);
+    size_t len = readbytes / NB_RECORD;
     stop_and_print_interval(&tin, "Read");
 
-    // std::sort(record_offs + start, record_offs + start + len, compare_for_sort);
-    // std::sort(record_buf + start, record_buf + start + len, compare_record_for_sort);
-    // qsort(record_buf + start, len, sizeof(record_t), compare_record);
     begin_time_track(&tin);
-    qsort(record_offs + start, len, sizeof(off_t), compare);
-    stop_and_print_interval(&tin, "QSort");
+    // std::sort(record_offs + start, record_offs + start + len, compare_for_sort);
+    std::sort(record_buf + start, record_buf + start + len, record_comparison);
+    // qsort(record_buf + start, len, sizeof(record_t), compare_record);
+    // qsort(record_offs + start, len, sizeof(off_t), compare);
     // partially_quicksort(record_buf, start, start + len - 1);
+    stop_and_print_interval(&tin, "Each Part Sort");
 }
 
-void twoway_merge(off_t *offin, off_t *offout, off_t start, off_t mid, off_t end) {
-    off_t l = start, r = mid + 1, i = start;
+// void twoway_merge(off_t *offin, off_t *offout, off_t start, off_t mid, off_t end) {
+//     off_t l = start, r = mid + 1, i = start;
 
-    while (l <= mid && r <= end) {
-        int res = compare(offin + l, offin + r);
-        if (res < 0) {
-            offout[i++] = offin[l++];
-        } else {
-            offout[i++] = offin[r++];
+//     while (l <= mid && r <= end) {
+//         int res = compare(offin + l, offin + r);
+//         if (res < 0) {
+//             offout[i++] = offin[l++];
+//         } else {
+//             offout[i++] = offin[r++];
+//         }
+//     }
+
+//     while (l <= mid) {
+//         offout[i++] = offin[l++];
+//     }
+
+//     while (r <= end) {
+//         offout[i++] = offin[r++];
+//     }
+// }
+
+void kway_merge(buffered_io_fd *out, record_t *rin, size_t buflen, off_t k, off_t len) {
+    record_t *mxidx[k], *ptrs[k];
+    std::priority_queue<heap_item_t, std::vector<heap_item_t>, heap_comparison> q;
+    for (int i = 0; i < k; i++) {
+        mxidx[i] = min(rin + buflen, rin + (i + 1) * len);
+        ptrs[i] = rin + i * len;
+        q.push({ ptrs[i], i });
+    }
+
+    while (!q.empty()) {
+        heap_item_t p = q.top();
+        q.pop();
+        buffered_append(out, p.record, sizeof(record_t));
+        ++ptrs[p.k];
+        if (ptrs[p.k] != mxidx[p.k]) {
+            q.push({ ptrs[p.k], p.k });
         }
     }
-
-    while (l <= mid) {
-        offout[i++] = offin[l++];
-    }
-
-    while (r <= end) {
-        offout[i++] = offin[r++];
-    }
 }
 
-void partial_sort(FILE *out, size_t num_records) {
+void partial_sort(buffered_io_fd *out, off_t offset, size_t num_records) {
     time_interval_t tin;
     begin_time_track(&tin);
-    // #pragma omp parallel for
-    // for (off_t start = 0; start < num_records; start += RECORD_THRESHOLD) {
-    //     size_t len = start + RECORD_THRESHOLD > num_records ? num_records - start : RECORD_THRESHOLD;
-    //     read_and_sort(start, len);
-    // }
-    read_and_sort(0, num_records);
-    stop_and_print_interval(&tin, "Sort");
+    #pragma omp parallel for
+    for (off_t start = 0; start < num_records; start += RECORD_THRESHOLD) {
+        size_t maxlen = start + RECORD_THRESHOLD >= num_records ? num_records - start : RECORD_THRESHOLD;
+        read_and_sort(start, offset, maxlen);
+    }
+    stop_and_print_interval(&tin, "All Partially Sorted");
     
     begin_time_track(&tin);
-    off_t *offin = record_offs, *offout = record_offs + num_records;
+    int k = num_records / RECORD_THRESHOLD + (num_records % RECORD_THRESHOLD != 0);
     // for (size_t mlen = RECORD_THRESHOLD; mlen < num_records; mlen <<= 1) {
     //     #pragma omp parallel for
     //     for (off_t start = 0; start < num_records; start += (mlen << 1)) {
@@ -215,22 +232,23 @@ void partial_sort(FILE *out, size_t num_records) {
 
     //     swap((void**)&offin, (void**)&offout);
     // }
+    kway_merge(out, record_buf, num_records, k, RECORD_THRESHOLD);
     stop_and_print_interval(&tin, "Merge");
     
     begin_time_track(&tin);
-    for (off_t i = 0; i < num_records; i ++) {
-        off_t idx = offin[i];
-        fwrite(record_buf + idx, NB_RECORD, 1, out);
-    }
+    // for (off_t i = 0; i < num_records; i ++) {
+    //     off_t idx = offin[i];
+    //     fwrite(record_buf + idx, NB_RECORD, 1, out);
+    // }
 
-    fflush(out);
+    buffered_flush(out);
     stop_and_print_interval(&tin, "File write");
 }
 
-record_t *get_next_record(FILE *in, record_t *buf, record_t **ptr, size_t bufsiz, size_t *remain) {
+record_t *get_next_record(buffered_io_fd *in, record_t *buf, record_t **ptr, size_t bufsiz, size_t *remain) {
     if (*remain == 0) {
-        if (feof(in)) return NULL;
-        *remain = read_records(in, buf, bufsiz / NB_RECORD);
+        *remain = buffered_read(in, buf, bufsiz * NB_RECORD) / NB_RECORD;
+        if (*remain <= 0) return NULL;
         *ptr = buf;
     }
 
@@ -239,7 +257,7 @@ record_t *get_next_record(FILE *in, record_t *buf, record_t **ptr, size_t bufsiz
     return *ptr - 1;
 }
 
-void external_merge(FILE *fin_left, FILE *fin_right, FILE *fout) {
+void external_merge(buffered_io_fd *fin_left, buffered_io_fd *fin_right, buffered_io_fd *fout) {
     // simple
     time_interval_t tin;
     begin_time_track(&tin);
@@ -255,12 +273,14 @@ void external_merge(FILE *fin_left, FILE *fin_right, FILE *fout) {
     // size_t it = 0;
     while (l && r) {
         // prev = cur;
-        if (compare_record(l, r) < 0) {
-            fwrite(l, NB_RECORD, 1, fout);
+        if (record_comparison(*l, *r)) {
+            // fwrite(l, NB_RECORD, 1, fout);
+            buffered_append(fout, l, NB_RECORD);
             // cur = *l;
             l = get_next_record(fin_left, lbuf, &lp, bufsiz, &lremain);
         } else {
-            fwrite(r, NB_RECORD, 1, fout);
+            // fwrite(r, NB_RECORD, 1, fout);
+            buffered_append(fout, r, NB_RECORD);
             // cur = *r;
             r = get_next_record(fin_right, rbuf, &rp, bufsiz, &rremain);
         }
@@ -273,7 +293,7 @@ void external_merge(FILE *fin_left, FILE *fin_right, FILE *fout) {
 
     while (l) {
         // prev = cur;
-        fwrite(l, NB_RECORD, 1, fout);
+        buffered_append(fout, l, NB_RECORD);
         // cur = *l;
         l = get_next_record(fin_left, lbuf, &lp, bufsiz, &lremain);
         // ++it;
@@ -285,7 +305,7 @@ void external_merge(FILE *fin_left, FILE *fin_right, FILE *fout) {
 
     while (r) {
         // prev = cur;
-        fwrite(r, NB_RECORD, 1, fout);
+        buffered_append(fout, r, NB_RECORD);
         // cur = *r;
         r = get_next_record(fin_right, rbuf, &rp, bufsiz, &rremain);
         // ++it;
@@ -295,7 +315,8 @@ void external_merge(FILE *fin_left, FILE *fin_right, FILE *fout) {
         // }
     }
     
-    fflush(fout);
+    // fflush(fout);
+    buffered_flush(fout);
     stop_and_print_interval(&tin, "External Merge");
 }
 
@@ -316,57 +337,45 @@ int main(int argc, char* argv[]) {
     inbuf[0] = (byte*)malloc(INPUT_BUFSIZ);
     inbuf[1] = (byte*)malloc(INPUT_BUFSIZ);
     outbuf = (byte*)malloc(OUTPUT_BUFSIZ);
-
     input_fd = open(argv[1], O_RDONLY);
-
-    fin = fopen(argv[1], "rb");
-    if (fin == NULL) {
+    if (input_fd == -1) {
         printf("error: cannot open file\n");
         return -1;
     }
-    setvbuf(fin, inbuf[0], _IOFBF, INPUT_BUFSIZ);
 
-    fseeko(fin, 0, SEEK_END);
-    file_size = ftello(fin);
-    rewind(fin);
+    file_size = lseek(input_fd, 0, SEEK_END);
     total_records = file_size / NB_RECORD;
 
-    fout = fopen(argv[2], "wb+");
+    fout = buffered_open(argv[2], O_RDWR | O_CREAT | O_TRUNC, outbuf, OUTPUT_BUFSIZ);
+    // fout = fopen(argv[2], "wb+");
     if (fout == NULL) {
         printf("error: cannot create output file\n");
         return -1;
     }
-    setvbuf(fout, outbuf, _IOFBF, OUTPUT_BUFSIZ);
 
-    record_buf_size = total_records * NB_RECORD > MAX_MEMSIZ_FOR_DATA ? MAX_MEMSIZ_FOR_DATA : total_records * NB_RECORD;
+    record_buf_size = min(total_records * NB_RECORD, MAX_MEMSIZ_FOR_DATA);
     record_buf = (record_t*)malloc(record_buf_size);
 
     size_t num_record_for_partition = record_buf_size / NB_RECORD;
-    size_t num_partition = total_records / num_record_for_partition;
-    if (total_records % num_record_for_partition != 0) {
-        ++num_partition;
-    }
-    record_offs = (off_t*)malloc(2 * num_record_for_partition * sizeof(off_t));
+    size_t num_partition = total_records / num_record_for_partition + (total_records % num_record_for_partition != 0);
 
     if (num_partition <= 1) {
-        partial_sort(fout, total_records);
-            setvbuf(fin, NULL, _IONBF, 0);
-    fclose(fin);
+        // setvbuf(fout, outbuf, _IOFBF, OUTPUT_BUFSIZ);
+        partial_sort(fout, 0, total_records);
     } else {
-        tmpfiles = (FILE **)malloc(2 * num_partition * sizeof(FILE*));
+        tmpfiles = (buffered_io_fd **)malloc(2 * num_partition * sizeof(buffered_io_fd*));
         char name[15];
         for (int i = 0; i < 2 * num_partition; i++) {
             sprintf(name, TMPFILE_NAME, i);
-            tmpfiles[i] = fopen(name, "wb+");
+            tmpfiles[i] = buffered_open(name, O_RDWR | O_CREAT | O_TRUNC, outbuf, OUTPUT_BUFSIZ);
+            // tmpfiles[i] = fopen(name, "wb+");
         }
 
         int tidx = 0;
         for (off_t offset = 0; offset < total_records; offset += num_record_for_partition, ++tidx) {
             size_t num_records = min(offset + num_record_for_partition, total_records) - offset;
-            partial_sort(tmpfiles[tidx], num_records);
+            partial_sort(tmpfiles[tidx], offset, num_records);
         }
-        setvbuf(fin, NULL, _IONBF, 0);
-    fclose(fin);
 
         size_t partition = num_partition;
         int fpm[2][partition];
@@ -379,7 +388,7 @@ int main(int argc, char* argv[]) {
         while (partition) {
             int oi = 0;
             for (int i = partition - 1; i >= 0; i -= 2, ++oi) {
-                FILE *pfin_left, *pfin_right, *pfout;
+                buffered_io_fd *pfin_left, *pfin_right, *pfout;
 
                 if (i == 0) {
                     swap((void**)&fpm[k ^ 1][oi], (void**)&fpm[k][i]);
@@ -396,18 +405,17 @@ int main(int argc, char* argv[]) {
                 }
 
                 // printf("partition: %d, i: %d, left_file: %d, right_file: %d, out_file: %d, oi: %d\n", partition, i, fpm[k][i - 1], fpm[k][i], fpm[k ^ 1][oi], oi);
-
-                fseeko(pfin_left, 0, SEEK_END);
-                fseeko(pfin_right, 0, SEEK_END);
-                size_t len_left = ftello(pfin_left), len_right = ftello(pfin_right);
                 
-                rewind(pfin_left);
-                rewind(pfin_right);
-                rewind(pfout);
+                buffered_reset(pfin_left);
+                buffered_reset(pfin_right);
+                buffered_reset(pfout);
+                // rewind(pfin_left);
+                // rewind(pfin_right);
+                // rewind(pfout);
 
-                setvbuf(pfin_left, inbuf[0], _IOFBF, INPUT_BUFSIZ);
-                setvbuf(pfin_right, inbuf[1], _IOFBF, INPUT_BUFSIZ);
-                setvbuf(pfout, outbuf, _IOFBF, OUTPUT_BUFSIZ);
+                // setvbuf(pfin_left, inbuf[0], _IONBF, INPUT_BUFSIZ);
+                // setvbuf(pfin_right, inbuf[1], _IONBF, INPUT_BUFSIZ);
+                // setvbuf(pfout, outbuf, _IOFBF, OUTPUT_BUFSIZ);
                 external_merge(pfin_left, pfin_right, pfout);
             }
 
@@ -418,14 +426,14 @@ int main(int argc, char* argv[]) {
         }
     }
 
+    close(input_fd);
     time_interval_t tin;
     begin_time_track(&tin);
     if (num_partition > 1) {
         char name[15];
         for (off_t i = 0; i < 2 * num_partition; i++) {
             sprintf(name, TMPFILE_NAME, i);
-            setvbuf(tmpfiles[i], NULL, _IONBF, 0);
-            fclose(tmpfiles[i]);
+            buffered_close(tmpfiles[i]);
             remove(name);
         }
         free(tmpfiles);
@@ -433,15 +441,13 @@ int main(int argc, char* argv[]) {
     stop_and_print_interval(&tin, "Flush File");
 
     begin_time_track(&tin);
-    setvbuf(fout, NULL, _IONBF, 0);
-    fclose(fout);
+    buffered_close(fout);
     stop_and_print_interval(&tin, "Flush File");
 
     free(inbuf[0]);
     free(inbuf[1]);
     free(outbuf);
     free(record_buf);
-    free(record_offs);
 
     return 0;
 }
