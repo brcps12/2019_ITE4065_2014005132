@@ -58,4 +58,5 @@ ssize_t buffered_append(buffered_io_fd *fd, void *buf, size_t nbytes) {
     memcpy(fd->ptr, buf, nbytes);
     fd->ptr += nbytes;
     fd->written += nbytes;
+    return nbytes;
 }

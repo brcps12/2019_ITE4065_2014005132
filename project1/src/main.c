@@ -19,7 +19,7 @@
 #define max(a, b) ((a) > (b) ? (a) : (b))
 #define min(a, b) ((a) < (b) ? (a) : (b))
 
-#define RECORD_THRESHOLD 10000000
+#define RECORD_THRESHOLD 100000
 
 #define NUM_OF_THREADS (80)
 // It can be set in dynamically: currently 80% of total(=2g)
@@ -44,7 +44,6 @@ buffered_io_fd *fout;
 size_t record_buf_size;
 size_t file_size, total_records;
 
-byte *inbuf[2];
 byte *outbuf;
 record_t *record_buf;
 
@@ -114,41 +113,54 @@ size_t read_records(FILE *in, void *buf, size_t len) {
     return fread(buf, NB_RECORD, len, in);
 }
 
-// void partially_partition(record_t *records, off_t start, off_t end, off_t *i, off_t *j) {
-//     if (end - start <= 1) {
-//         if (compare_record(&records[start], &records[end]) > 0) {
-//             std::swap(records[start], records[end]);
-//         }
-//         *i = start,
-//         *j = end;
-//         return;
-//     }
-//     off_t it = start;
-//     record_t pivot = records[start]; // todo: optimize
-//     while (it <= end) {
-//         int cmp = compare_record(&records[it], &pivot);
-//         if (cmp < 0) {
-//             std::swap(records[start], records[it]);
-//             ++start, ++it;
-//         } else if (cmp == 0) {
-//             ++it;
-//         } else {
-//             std::swap(records[it], records[end]);
-//             --end;
-//         }
-//     }
-//     *i = start - 1;
-//     *j = it;
-// }
+void partially_partition(record_t *records, off_t start, off_t end, off_t *i, off_t *j) {
+    if (end - start <= 1) {
+        if (compare_record(&records[start], &records[end]) > 0) {
+            std::swap(records[start], records[end]);
+        }
+        *i = start,
+        *j = end;
+        return;
+    }
+    off_t it = start;
+    rec_key_t pivot;
+    memcpy(&pivot, &records[start + (end - start + 1) / 2].key, NB_KEY); // todo: optimize
+    while (it <= end) {
+        int cmp = compare_record(&records[it], (record_t*)&pivot);
+        if (cmp < 0) {
+            std::swap(records[start], records[it]);
+            ++start, ++it;
+        } else if (cmp == 0) {
+            ++it;
+        } else {
+            std::swap(records[it], records[end]);
+            --end;
+        }
+    }
+    *i = start - 1;
+    *j = it;
+}
 
-// void partially_quicksort(record_t *records, off_t start, off_t end) {
-//     if (start >= end) return;
-//     off_t i, j; 
-    
-//     partially_partition(records, start, end, &i, &j);
-//     partially_quicksort(records, start, i);
-//     partially_quicksort(records, j, end);
-// }
+void partially_quicksort(record_t *records, off_t start, off_t end, off_t offset) {
+    if (end - start <= RECORD_THRESHOLD) {
+        std::sort(records + start, records + end + 1, record_comparison);
+    } else {
+        if (start >= end) return;
+        off_t i, j; 
+        
+        partially_partition(records, start, end, &i, &j);
+
+        #pragma omp task
+        {
+            partially_quicksort(records, start, i, offset);
+        }
+
+        #pragma omp task
+        {
+            partially_quicksort(records, j, end, offset);
+        }
+    }
+}
 
 void read_and_sort(off_t start, off_t offset, size_t maxlen) {
     // time_interval_t tin;
@@ -209,16 +221,29 @@ void kway_merge(buffered_io_fd *out, record_t *rin, size_t buflen, off_t k, off_
 }
 
 void partial_sort(buffered_io_fd *out, off_t offset, size_t num_records) {
-    // time_interval_t tin;
-    // begin_time_track(&tin);
+    time_interval_t tin;
+    begin_time_track(&tin);
+    // #pragma omp parallel for
+    // for (off_t start = 0; start < num_records; start += RECORD_THRESHOLD) {
+    //     size_t maxlen = start + RECORD_THRESHOLD >= num_records ? num_records - start : RECORD_THRESHOLD;
+    //     read_and_sort(start, offset, maxlen);
+    // }
     #pragma omp parallel for
     for (off_t start = 0; start < num_records; start += RECORD_THRESHOLD) {
         size_t maxlen = start + RECORD_THRESHOLD >= num_records ? num_records - start : RECORD_THRESHOLD;
-        read_and_sort(start, offset, maxlen);
+        pread(input_fd, record_buf + start, maxlen * NB_RECORD, (offset + start) * NB_RECORD);
     }
-    // stop_and_print_interval(&tin, "All Partially Sorted");
+    // pread(input_fd, record_buf, num_records * NB_RECORD, offset * NB_RECORD);
+    #pragma omp parallel
+    {
+        #pragma omp single nowait
+        {
+            partially_quicksort(record_buf, 0, num_records - 1, offset);
+        }
+    }
+    stop_and_print_interval(&tin, "All Partially Sorted");
     
-    // begin_time_track(&tin);
+    begin_time_track(&tin);
     int k = num_records / RECORD_THRESHOLD + (num_records % RECORD_THRESHOLD != 0);
     // for (size_t mlen = RECORD_THRESHOLD; mlen < num_records; mlen <<= 1) {
     //     #pragma omp parallel for
@@ -236,17 +261,18 @@ void partial_sort(buffered_io_fd *out, off_t offset, size_t num_records) {
 
     //     swap((void**)&offin, (void**)&offout);
     // }
-    kway_merge(out, record_buf, num_records, k, RECORD_THRESHOLD);
-    // stop_and_print_interval(&tin, "Merge");
+    // kway_merge(out, record_buf, num_records, k, RECORD_THRESHOLD);
+    stop_and_print_interval(&tin, "Merge");
     
-    // begin_time_track(&tin);
+    begin_time_track(&tin);
     // for (off_t i = 0; i < num_records; i ++) {
     //     off_t idx = offin[i];
     //     fwrite(record_buf + idx, NB_RECORD, 1, out);
     // }
 
-    buffered_flush(out);
-    // stop_and_print_interval(&tin, "File write");
+    // buffered_flush(out);
+    pwrite(out->fd, record_buf, num_records * NB_RECORD, 0);
+    stop_and_print_interval(&tin, "File write");
 }
 
 record_t *get_next_record(buffered_io_fd *in, record_t *buf, record_t **ptr, size_t bufsiz, ssize_t *remain) {
@@ -262,6 +288,8 @@ record_t *get_next_record(buffered_io_fd *in, record_t *buf, record_t **ptr, siz
 }
 
 void kway_external_merge(buffered_io_fd **tmpfiles, buffered_io_fd *out, size_t k) {
+    time_interval_t tin;
+    begin_time_track(&tin);
     record_t *bufs[k], *ptrs[k], *record;
     ssize_t remains[k] = { 0, };
     size_t bufsiz = record_buf_size / (NB_RECORD * k);
@@ -282,6 +310,7 @@ void kway_external_merge(buffered_io_fd **tmpfiles, buffered_io_fd *out, size_t 
         }
     }
     buffered_flush(out);
+    stop_and_print_interval(&tin, "External Merge");
 }
 
 // void external_merge(buffered_io_fd *fin_left, buffered_io_fd *fin_right, buffered_io_fd *fout) {
@@ -361,8 +390,6 @@ int main(int argc, char* argv[]) {
     omp_set_num_threads(NUM_OF_THREADS);
 #endif
 
-    inbuf[0] = (byte*)malloc(INPUT_BUFSIZ);
-    inbuf[1] = (byte*)malloc(INPUT_BUFSIZ);
     outbuf = (byte*)malloc(OUTPUT_BUFSIZ);
     input_fd = open(argv[1], O_RDONLY);
     if (input_fd == -1) {
@@ -409,12 +436,18 @@ int main(int argc, char* argv[]) {
         for (int i = 0; i < num_partition; i++) {
             buffered_reset(tmpfiles[i]);
         }
+        
         kway_external_merge(tmpfiles, fout, num_partition);
     }
 
     close(input_fd);
-    // time_interval_t tin;
-    // begin_time_track(&tin);
+    time_interval_t tin;
+
+    begin_time_track(&tin);
+    buffered_close(fout);
+    stop_and_print_interval(&tin, "Flush File");
+
+    begin_time_track(&tin);
     if (num_partition > 1) {
         char name[15];
         for (off_t i = 0; i < num_partition; i++) {
@@ -424,14 +457,8 @@ int main(int argc, char* argv[]) {
         }
         free(tmpfiles);
     }
-    // stop_and_print_interval(&tin, "Flush File");
+    stop_and_print_interval(&tin, "Flush File");
 
-    // begin_time_track(&tin);
-    buffered_close(fout);
-    // stop_and_print_interval(&tin, "Flush File");
-
-    free(inbuf[0]);
-    free(inbuf[1]);
     free(outbuf);
     free(record_buf);
 
