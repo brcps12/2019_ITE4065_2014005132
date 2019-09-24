@@ -19,7 +19,7 @@
 #define max(a, b) ((a) > (b) ? (a) : (b))
 #define min(a, b) ((a) < (b) ? (a) : (b))
 
-#define RECORD_THRESHOLD 1000000
+#define RECORD_THRESHOLD 100000
 
 #define NUM_OF_THREADS (80)
 // It can be set in dynamically: currently 80% of total(=2g)
@@ -115,7 +115,7 @@ size_t read_records(FILE *in, void *buf, size_t len) {
 
 void partially_partition(record_t *records, off_t start, off_t end, off_t *i, off_t *j) {
     if (end - start <= 1) {
-        if (compare_record(&records[start], &records[end]) > 0) {
+        if (memcmp(&records[start], &records[end], NB_KEY) > 0) {
             std::swap(records[start], records[end]);
         }
         *i = start,
@@ -126,7 +126,7 @@ void partially_partition(record_t *records, off_t start, off_t end, off_t *i, of
     rec_key_t pivot;
     memcpy(&pivot, &records[start + (end - start + 1) / 2].key, NB_KEY); // todo: optimize
     while (it <= end) {
-        int cmp = compare_record(&records[it], (record_t*)&pivot);
+        int cmp = memcmp(&records[it], &pivot, NB_KEY);
         if (cmp < 0) {
             std::swap(records[start], records[it]);
             ++start, ++it;
@@ -271,7 +271,11 @@ void partial_sort(buffered_io_fd *out, off_t offset, size_t num_records) {
     // }
 
     // buffered_flush(out);
-    pwrite(out->fd, record_buf, num_records * NB_RECORD, 0);
+    #pragma omp parallel for
+    for (off_t start = 0; start < num_records; start += RECORD_THRESHOLD) {
+        size_t maxlen = start + RECORD_THRESHOLD >= num_records ? num_records - start : RECORD_THRESHOLD;
+        pwrite(out->fd, record_buf + start, maxlen * NB_RECORD, (offset + start) * NB_RECORD);
+    }
     stop_and_print_interval(&tin, "File write");
 }
 
