@@ -19,7 +19,7 @@
 #define max(a, b) ((a) > (b) ? (a) : (b))
 #define min(a, b) ((a) < (b) ? (a) : (b))
 
-#define RECORD_THRESHOLD 100000
+#define RECORD_THRESHOLD 1000000
 
 #define NUM_OF_THREADS (80)
 // It can be set in dynamically: currently 80% of total(=2g)
@@ -50,7 +50,7 @@ record_t *record_buf;
 buffered_io_fd **tmpfiles;
 // FILE **tmpfiles;
 
-bool record_comparison(record_t &a, record_t &b) {
+bool record_comparison(const record_t &a, const record_t &b) {
     return memcmp(&a, &b, NB_KEY) < 0;
 }
 
@@ -124,7 +124,7 @@ void partially_partition(record_t *records, off_t start, off_t end, off_t *i, of
     }
     off_t it = start;
     rec_key_t pivot;
-    memcpy(&pivot, &records[start + (end - start + 1) / 2].key, NB_KEY); // todo: optimize
+    memcpy(&pivot, &records[start].key, NB_KEY); // todo: optimize
     while (it <= end) {
         int cmp = memcmp(&records[it], &pivot, NB_KEY);
         if (cmp < 0) {
@@ -141,23 +141,30 @@ void partially_partition(record_t *records, off_t start, off_t end, off_t *i, of
     *j = it;
 }
 
-void partially_quicksort(record_t *records, off_t start, off_t end, off_t offset) {
+void partially_quicksort(record_t *records, off_t start, off_t end) {
     if (end - start <= RECORD_THRESHOLD) {
         std::sort(records + start, records + end + 1, record_comparison);
     } else {
         if (start >= end) return;
         off_t i, j; 
-        
-        partially_partition(records, start, end, &i, &j);
+            
+        rec_key_t pivot;
+        memcpy(&pivot, &records[start + (end - start + 1) / 2].key, NB_KEY);
+        record_t *ptr = std::partition(records + start, records + end + 1, [pivot](const record_t &a) -> bool { 
+            return memcmp(&a, &pivot, NB_KEY) < 0;
+        });
+        // partially_partition(records, start, end, &i, &j);
 
         #pragma omp task
         {
-            partially_quicksort(records, start, i, offset);
+            // partially_quicksort(records, start, i);
+            partially_quicksort(records, start, (ptr - records) - 1);
         }
 
         #pragma omp task
         {
-            partially_quicksort(records, j, end, offset);
+            // partially_quicksort(records, j, end);
+            partially_quicksort(records, (ptr - records), end);
         }
     }
 }
@@ -228,17 +235,17 @@ void partial_sort(buffered_io_fd *out, off_t offset, size_t num_records) {
     //     size_t maxlen = start + RECORD_THRESHOLD >= num_records ? num_records - start : RECORD_THRESHOLD;
     //     read_and_sort(start, offset, maxlen);
     // }
-    #pragma omp parallel for
-    for (off_t start = 0; start < num_records; start += RECORD_THRESHOLD) {
-        size_t maxlen = start + RECORD_THRESHOLD >= num_records ? num_records - start : RECORD_THRESHOLD;
-        pread(input_fd, record_buf + start, maxlen * NB_RECORD, (offset + start) * NB_RECORD);
-    }
-    // pread(input_fd, record_buf, num_records * NB_RECORD, offset * NB_RECORD);
+    // #pragma omp parallel for
+    // for (off_t start = 0; start < num_records; start += RECORD_THRESHOLD) {
+    //     size_t maxlen = start + RECORD_THRESHOLD >= num_records ? num_records - start : RECORD_THRESHOLD;
+    //     pread(input_fd, record_buf + start, maxlen * NB_RECORD, (offset + start) * NB_RECORD);
+    // }
+    pread(input_fd, record_buf, num_records * NB_RECORD, offset * NB_RECORD);
     #pragma omp parallel
     {
         #pragma omp single nowait
         {
-            partially_quicksort(record_buf, 0, num_records - 1, offset);
+            partially_quicksort(record_buf, 0, num_records - 1);
         }
     }
     stop_and_print_interval(&tin, "All Partially Sorted");
@@ -271,11 +278,12 @@ void partial_sort(buffered_io_fd *out, off_t offset, size_t num_records) {
     // }
 
     // buffered_flush(out);
-    #pragma omp parallel for
-    for (off_t start = 0; start < num_records; start += RECORD_THRESHOLD) {
-        size_t maxlen = start + RECORD_THRESHOLD >= num_records ? num_records - start : RECORD_THRESHOLD;
-        pwrite(out->fd, record_buf + start, maxlen * NB_RECORD, (offset + start) * NB_RECORD);
-    }
+    // #pragma omp parallel for
+    // for (off_t start = 0; start < num_records; start += RECORD_THRESHOLD) {
+    //     size_t maxlen = start + RECORD_THRESHOLD >= num_records ? num_records - start : RECORD_THRESHOLD;
+    //     pwrite(out->fd, record_buf + start, maxlen * NB_RECORD, (offset + start) * NB_RECORD);
+    // }
+    pwrite(out->fd, record_buf, num_records * NB_RECORD, 0);
     stop_and_print_interval(&tin, "File write");
 }
 
