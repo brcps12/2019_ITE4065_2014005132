@@ -235,12 +235,12 @@ void partial_sort(buffered_io_fd *out, off_t offset, size_t num_records) {
     //     size_t maxlen = start + RECORD_THRESHOLD >= num_records ? num_records - start : RECORD_THRESHOLD;
     //     read_and_sort(start, offset, maxlen);
     // }
-    // #pragma omp parallel for
-    // for (off_t start = 0; start < num_records; start += RECORD_THRESHOLD) {
-    //     size_t maxlen = start + RECORD_THRESHOLD >= num_records ? num_records - start : RECORD_THRESHOLD;
-    //     pread(input_fd, record_buf + start, maxlen * NB_RECORD, (offset + start) * NB_RECORD);
-    // }
-    pread(input_fd, record_buf, num_records * NB_RECORD, offset * NB_RECORD);
+    #pragma omp parallel for
+    for (off_t start = 0; start < num_records; start += RECORD_THRESHOLD) {
+        size_t maxlen = start + RECORD_THRESHOLD >= num_records ? num_records - start : RECORD_THRESHOLD;
+        pread(input_fd, record_buf + start, maxlen * NB_RECORD, (offset + start) * NB_RECORD);
+    }
+    // pread(input_fd, record_buf, num_records * NB_RECORD, offset * NB_RECORD);
     stop_and_print_interval(&tin, "All Read");
     begin_time_track(&tin);
     #pragma omp parallel
