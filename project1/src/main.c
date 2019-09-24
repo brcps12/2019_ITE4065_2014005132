@@ -19,7 +19,7 @@
 #define max(a, b) ((a) > (b) ? (a) : (b))
 #define min(a, b) ((a) < (b) ? (a) : (b))
 
-#define RECORD_THRESHOLD 1000000
+#define RECORD_THRESHOLD 10000000
 
 #define NUM_OF_THREADS (80)
 // It can be set in dynamically: currently 80% of total(=2g)
