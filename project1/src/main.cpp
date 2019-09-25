@@ -62,7 +62,7 @@ int main(int argc, char* argv[]) {
     total_records = file_size / NB_RECORD;
 
     // prepare output file
-    output_fd = open(argv[1], O_CREAT | O_RDWR | O_TRUNC);
+    output_fd = open(argv[2], O_CREAT | O_RDWR | O_TRUNC, 0777);
     pwrite(output_fd, "", 1, file_size - 1);
 
     tracker.start();
