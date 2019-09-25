@@ -472,11 +472,21 @@ int main(int argc, char* argv[]) {
 
     pwrite(fout->fd, "\0", 1, file_size - 1);
 
-    record_buf_size = min(total_records * NB_RECORD, MAX_MEMSIZ_FOR_DATA);
+    size_t num_record_for_partition;
+    size_t num_partition;
+    if (total_records * NB_RECORD > MAX_MEMSIZ_FOR_DATA) {
+        num_partition = total_records * NB_RECORD / MAX_MEMSIZ_FOR_DATA + 1;
+        num_record_for_partition = total_records / num_partition + 1;
+
+    } else {
+        num_record_for_partition = total_records;
+        num_partition = 1;
+    }
+    record_buf_size = num_record_for_partition * NB_RECORD;
     record_buf = (record_t*)malloc(record_buf_size);
 
-    size_t num_record_for_partition = record_buf_size / NB_RECORD;
-    size_t num_partition = total_records / num_record_for_partition + (total_records % num_record_for_partition != 0);
+    // size_t num_record_for_partition = record_buf_size / NB_RECORD;
+    // size_t num_partition = total_records / num_record_for_partition + (total_records % num_record_for_partition != 0);
 
     lseek(input_fd, 0, SEEK_SET);
     
