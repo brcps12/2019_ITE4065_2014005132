@@ -55,6 +55,7 @@ int main(int argc, char* argv[]) {
         return 0;
     }
 
+    TimeTracker tracker;
     // prepare input file
     fin.open(argv[1], ios::in | ios::binary);
 
@@ -67,11 +68,19 @@ int main(int argc, char* argv[]) {
     // prepare output file
     fout.open(argv[2], ios::trunc | ios::binary);
 
-    fout.seekp(file_size - 1, ios::beg);
-    fout.write("\0", 1);
+    byte * buffer = (byte*)malloc(file_size);
+
+    tracker.start();
+    fin.read(buffer, file_size);
+    tracker.stopAndPrint("Read Time");
+    
+    tracker.start();
+    fout.write(buffer, file_size);
 
     fin.close();
     fout.close();
+    tracker.stopAndPrint("Write Time");
+    free(buffer);
 
     return 0;
 }
