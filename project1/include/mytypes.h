@@ -1,6 +1,8 @@
 #ifndef __MYTYPES_H
 #define __MYTYPES_H
 
+#include <sys/types.h>
+
 #define KB ((size_t)1024)
 #define MB ((size_t)1048576)
 #define GB ((size_t)1073741824)
