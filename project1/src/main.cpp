@@ -42,8 +42,7 @@ typedef struct {
     uint k;
 } heap_item_t;
 
-ifstream fin;
-ofstream fout;
+int input_fd, output_fd;
 
 size_t file_size, total_records;
 
@@ -57,30 +56,29 @@ int main(int argc, char* argv[]) {
 
     TimeTracker tracker;
     // prepare input file
-    fin.open(argv[1], ios::in | ios::binary);
+    input_fd = open(argv[1], O_RDONLY);
 
-    fin.seekg(0, ios::end);
-    file_size = fin.tellg();
-    fin.seekg(0, ios::beg);
-
+    file_size = lseek(input_fd, 0, SEEK_END);
     total_records = file_size / NB_RECORD;
 
     // prepare output file
-    fout.open(argv[2], ios::trunc | ios::binary);
-
-    byte * buffer = (byte*)malloc(file_size);
+    output_fd = open(argv[1], O_CREAT | O_RDWR | O_TRUNC);
+    pwrite(output_fd, "", 1, file_size - 1);
 
     tracker.start();
-    fin.read(buffer, file_size);
+    byte *in = (byte *)mmap(NULL, file_size, PROT_READ, MAP_SHARED, input_fd, 0);
     tracker.stopAndPrint("Read Time");
     
     tracker.start();
-    fout.write(buffer, file_size);
+    byte *out = (byte *)mmap(NULL, file_size, PROT_READ | PROT_WRITE, MAP_SHARED, output_fd, 0);
+    memcpy(out, in, file_size);
+    msync(out, file_size, MS_SYNC);
 
-    fin.close();
-    fout.close();
+    close(input_fd);
+    close(output_fd);
+    munmap(in, file_size);
+    munmap(out, file_size);
     tracker.stopAndPrint("Write Time");
-    free(buffer);
 
     return 0;
 }
