@@ -1,18 +1,18 @@
 # Compiler and Compile options.
 CC = g++
-CFLAGS = -Wall -Wno-sign-compare
+CXXFLAGS = -Wall -Wno-sign-compare -DLOCAL_TEST
 
-CFLAGS += -O2
-#CFLAGS += -g
+#CXXFLAGS += -O2
+CXXFLAGS += -g
 
 # Macros specifying path for compile.
-SRCS := $(wildcard src/*.c)
-OBJS := $(SRCS:.c=.o)
+SRCS := $(wildcard src/*.cpp)
+OBJS := $(SRCS:.cpp=.o)
 INC = ./include/
 LIB = ./lib/
 
 # Pre-Processor.
-CFLAGS += -I$(INC) -L$(LIB) -lpthread -fopenmp --std=c++11
+CXXFLAGS += -I$(INC) -L$(LIB) -lpthread -fopenmp --std=c++11
 
 
 TARGET = run
@@ -21,7 +21,7 @@ TARGET = run
 all: $(TARGET)
 
 $(TARGET): $(OBJS)
-	$(CC) -o $(TARGET) $(OBJS) $(CFLAGS)
+	$(CC) -o $(TARGET) $(OBJS) $(CXXFLAGS)
 
 
 

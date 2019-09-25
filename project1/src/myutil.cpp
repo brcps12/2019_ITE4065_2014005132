@@ -1,4 +1,4 @@
-#include <myutil.h>
+#include <myutil.hpp>
 #include <stdio.h>
 
 void print_key(record_t *record) {
@@ -16,3 +16,8 @@ void print_records(record_t *records, size_t num) {
         print_key(records + i);
     }
 }
+
+int myrandom(int begin, int end) {
+    return (end - begin + 1) * ((double)rand() / RAND_MAX) + begin;
+}
+

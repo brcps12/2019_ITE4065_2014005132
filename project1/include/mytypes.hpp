@@ -1,5 +1,5 @@
-#ifndef __MYTYPES_H
-#define __MYTYPES_H
+#ifndef __MYTYPES_HPP
+#define __MYTYPES_HPP
 
 #include <sys/types.h>
 
