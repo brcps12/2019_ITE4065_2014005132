@@ -2,8 +2,8 @@
 CC = g++
 CXXFLAGS = -Wall -Wno-sign-compare -DLOCAL_TEST
 
-#CXXFLAGS += -O2
-CXXFLAGS += -g
+CXXFLAGS += -O3
+#CXXFLAGS += -g
 
 # Macros specifying path for compile.
 SRCS := $(wildcard src/*.cpp)
