@@ -59,3 +59,7 @@ ssize_t buffered_append(buffered_io_fd *fd, void *buf, size_t nbytes) {
     fd->ptr += nbytes;
     fd->written += nbytes;
 }
+
+void get_fstat(buffered_io_fd *fd) {
+    fstat(fd->fd, &fd->st);
+}

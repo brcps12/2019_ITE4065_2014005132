@@ -1,6 +1,7 @@
 #ifndef __BUFIO_HPP
 #define __BUFIO_HPP
 #include <sys/types.h>
+#include <sys/stat.h>
 #include <mytypes.hpp>
 
 typedef struct {
@@ -9,6 +10,7 @@ typedef struct {
     off_t offset;
     byte *buf;
     byte *ptr;
+    struct stat st;
 } buffered_io_fd;
 
 void buffered_reset(buffered_io_fd *fd);
@@ -22,5 +24,7 @@ void buffered_close(buffered_io_fd *fd);
 ssize_t buffered_read(buffered_io_fd *fd, void *buf, size_t nbytes);
 
 ssize_t buffered_append(buffered_io_fd *fd, void *buf, size_t nbytes);
+
+void get_fstat(buffered_io_fd *fd);
 
 #endif
