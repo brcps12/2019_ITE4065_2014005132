@@ -186,7 +186,7 @@ inline void radix_sort(record_t *buf, int len, int which) {
     }
 }
 
-void read_and_sort(off_t start, off_t offset, size_t maxlen) {
+inline void read_and_sort(off_t start, off_t offset, size_t maxlen) {
     // time_interval_t tin;
     // begin_time_track(&tin);
     // len = read_records(fin, record_buf + start, len);
@@ -225,7 +225,7 @@ void read_and_sort(off_t start, off_t offset, size_t maxlen) {
 //     }
 // }
 
-void kway_merge(buffered_io_fd *out, record_t *rin, size_t buflen, off_t k, off_t len) {
+inline void kway_merge(buffered_io_fd *out, record_t *rin, size_t buflen, off_t k, off_t len) {
     record_t *mxidx[k], *ptrs[k];
     std::priority_queue<heap_item_t, std::vector<heap_item_t>, heap_comparison> q;
     for (int i = 0; i < k; i++) {
@@ -245,7 +245,7 @@ void kway_merge(buffered_io_fd *out, record_t *rin, size_t buflen, off_t k, off_
     }
 }
 
-void partial_sort(buffered_io_fd *out, off_t offset, size_t num_records) {
+inline void partial_sort(buffered_io_fd *out, off_t offset, size_t num_records) {
     // time_interval_t tin;
     // begin_time_track(&tin);
     #pragma omp parallel for
@@ -286,7 +286,7 @@ void partial_sort(buffered_io_fd *out, off_t offset, size_t num_records) {
     // stop_and_print_interval(&tin, "File write");
 }
 
-record_t *get_next_record(buffered_io_fd *in, record_t *buf, record_t **ptr, size_t bufsiz, ssize_t *remain) {
+inline record_t *get_next_record(buffered_io_fd *in, record_t *buf, record_t **ptr, size_t bufsiz, ssize_t *remain) {
     if (*remain == 0) {
         *remain = buffered_read(in, buf, bufsiz * NB_RECORD) / NB_RECORD;
         if (*remain <= 0) return NULL;
@@ -298,7 +298,7 @@ record_t *get_next_record(buffered_io_fd *in, record_t *buf, record_t **ptr, siz
     return *ptr - 1;
 }
 
-void kway_external_merge(buffered_io_fd **tmpfiles, buffered_io_fd *out, size_t k) {
+inline void kway_external_merge(buffered_io_fd **tmpfiles, buffered_io_fd *out, size_t k) {
     record_t *bufs[k], *ptrs[k], *record;
     size_t sizs[k];
     size_t rmsiz = record_buf_size, lsiz = 0;
@@ -326,24 +326,24 @@ void kway_external_merge(buffered_io_fd **tmpfiles, buffered_io_fd *out, size_t 
         heap_item_t p = q.top();
         q.pop();
 
-        // if (q.empty()) {
-        //     buffered_flush(out);
-        //     size_t kk = p.k;
-        //     size_t insize = tmpfiles[kk]->st.st_size;
-        //     int fd = tmpfiles[kk]->fd;
-        //     off_t inoff = tmpfiles[kk]->offset, outoff = out->offset;
-        //     size_t remained_size = bufs[kk] + sizs[kk] - ptrs[kk] + 1;
-        //     outoff += pwrite(out->fd, ptrs[kk] - 1, remained_size * NB_RECORD, outoff);
+        if (q.empty()) {
+            buffered_append(out, p.record, sizeof(record_t));
+            buffered_flush(out);
+            size_t kk = p.k;
+            size_t insize = tmpfiles[kk]->st.st_size;
+            int fd = tmpfiles[kk]->fd;
+            off_t inoff = tmpfiles[kk]->offset, outoff = out->offset;
+            outoff += pwrite(out->fd, ptrs[kk], remains[kk] * NB_RECORD, outoff);
 
-        //     while (inoff < insize) {
-        //         ssize_t readbytes = pread(fd, record_buf, record_buf_size / NB_RECORD, inoff);
-        //         if (readbytes <= 0) break;
-        //         inoff += readbytes;
-        //         outoff += pwrite(out->fd, record_buf, readbytes, outoff);
-        //     }
+            while (inoff < insize) {
+                ssize_t readbytes = pread(fd, record_buf, record_buf_size / NB_RECORD, inoff);
+                if (readbytes <= 0) break;
+                inoff += readbytes;
+                outoff += pwrite(out->fd, record_buf, readbytes, outoff);
+            }
             
-        //     break;
-        // }
+            break;
+        }
 
         buffered_append(out, p.record, sizeof(record_t));
         record = get_next_record(tmpfiles[p.k], bufs[p.k], &ptrs[p.k], sizs[p.k], &remains[p.k]);
