@@ -10,6 +10,7 @@
 #include <queue>
 #include <algorithm>
 #include <vector>
+#include <sys/mman.h>
 
 #include <time_chk.hpp>
 #include <mytypes.hpp>
@@ -44,12 +45,13 @@ buffered_io_fd *fout;
 size_t record_buf_size;
 size_t file_size, total_records;
 
-byte *inbuf[2];
 byte *outbuf;
 record_t *record_buf;
 
 buffered_io_fd **tmpfiles;
 // FILE **tmpfiles;
+
+byte *outmap;
 
 bool record_comparison(record_t &a, record_t &b) {
     return memcmp(&a, &b, NB_KEY) < 0;
@@ -234,13 +236,27 @@ void kway_merge(buffered_io_fd *out, record_t *rin, size_t buflen, off_t k, off_
         q.push({ ptrs[i], i });
     }
 
-    while (!q.empty()) {
-        heap_item_t p = q.top();
-        q.pop();
-        buffered_append(out, p.record, sizeof(record_t));
-        ++ptrs[p.k];
-        if (ptrs[p.k] != mxidx[p.k]) {
-            q.push({ ptrs[p.k], p.k });
+    if (out == fout) {
+        off_t off = 0;
+        while (!q.empty()) {
+            heap_item_t p = q.top();
+            q.pop();
+            memcpy(outmap + off, p.record, sizeof(record_t));
+            off += NB_RECORD;
+            ++ptrs[p.k];
+            if (ptrs[p.k] != mxidx[p.k]) {
+                q.push({ ptrs[p.k], p.k });
+            }
+        }
+    } else {
+        while (!q.empty()) {
+            heap_item_t p = q.top();
+            q.pop();
+            buffered_append(out, p.record, sizeof(record_t));
+            ++ptrs[p.k];
+            if (ptrs[p.k] != mxidx[p.k]) {
+                q.push({ ptrs[p.k], p.k });
+            }
         }
     }
 }
@@ -309,10 +325,13 @@ void kway_external_merge(buffered_io_fd **tmpfiles, buffered_io_fd *out, size_t 
         q.push({ record, i });
     }
 
+    off_t off = 0;
     while (!q.empty()) {
         heap_item_t p = q.top();
         q.pop();
-        buffered_append(out, p.record, sizeof(record_t));
+        // buffered_append(out, p.record, sizeof(record_t));)
+        memcpy(outmap + off, p.record, sizeof(record_t));
+        off += NB_RECORD;
         record = get_next_record(tmpfiles[p.k], bufs[p.k], &ptrs[p.k], bufsiz, &remains[p.k]);
         if (record != NULL) {
             q.push({ record, p.k });
@@ -398,8 +417,6 @@ int main(int argc, char* argv[]) {
     // omp_set_num_threads(NUM_OF_THREADS);
 #endif
 
-    inbuf[0] = (byte*)malloc(INPUT_BUFSIZ);
-    inbuf[1] = (byte*)malloc(INPUT_BUFSIZ);
     outbuf = (byte*)malloc(OUTPUT_BUFSIZ);
     input_fd = open(argv[1], O_RDONLY);
     if (input_fd == -1) {
@@ -418,6 +435,8 @@ int main(int argc, char* argv[]) {
     }
 
     pwrite(fout->fd, "\0", 1, file_size - 1);
+
+    outmap = (byte*)mmap(NULL, file_size, PROT_READ | PROT_WRITE, MAP_SHARED, fout->fd, 0);
 
     record_buf_size = min(total_records * NB_RECORD, MAX_MEMSIZ_FOR_DATA);
     record_buf = (record_t*)malloc(record_buf_size);
@@ -466,10 +485,10 @@ int main(int argc, char* argv[]) {
     buffered_close(fout);
     // stop_and_print_interval(&tin, "Flush File");
 
-    free(inbuf[0]);
-    free(inbuf[1]);
     free(outbuf);
     free(record_buf);
+    msync(outmap, file_size, MS_ASYNC);
+    munmap(outmap, file_size);
 
     return 0;
 }
