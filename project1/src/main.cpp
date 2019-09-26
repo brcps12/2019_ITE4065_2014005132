@@ -19,6 +19,7 @@
 #define min(a, b) ((a) < (b) ? (a) : (b))
 
 #define RECORD_THRESHOLD 1000000
+#define BYTE_SIZE 256
 
 #define NUM_OF_THREADS (80)
 // It can be set in dynamically: currently 80% of total(=2g)
@@ -187,6 +188,58 @@ void kway_merge(buffered_io_fd *out, record_t *rin, size_t buflen, off_t k, off_
         ++ptrs[p.k];
         if (ptrs[p.k] != mxidx[p.k]) {
             q.push({ ptrs[p.k], p.k });
+        }
+    }
+}
+
+
+inline void radix_sort(record_t *buf, int len, int which) {
+    if (len < 1000) {
+        std::sort(buf, buf + len, [which](record_t &a, record_t &b) {
+            return memcmp(&a.key[which], &b.key[which], NB_KEY - which) < 0;
+        });
+        return;
+    }
+    // use 1 byte
+    record_t *last_[BYTE_SIZE + 1];
+    record_t **last = last_ + 1;
+    int count[BYTE_SIZE] = { 0, };
+
+    for (record_t *ptr = buf; ptr < buf + len; ++ptr) {
+        ++count[(unsigned char)ptr->key[which]];
+    }
+
+    last_[0] = last_[1] = buf;
+    for (int i = 1; i < BYTE_SIZE; ++i) {
+        last[i] = last[i-1] + count[i-1];
+    }
+
+    record_t *e = buf + len;
+    for (int i = 0; i < BYTE_SIZE; ++i) {
+        record_t *end = last[i-1] + count[i];
+        if (end == e) { 
+            last[i] = buf + len;
+            break;
+        }
+
+        while (last[i] != end) {
+            record_t swapper = *last[i];
+            unsigned char tag = (unsigned char)swapper.key[which];
+            if (tag != i) {
+                do {
+                    std::swap(swapper, *last[tag]++);
+                } while ((tag = (unsigned char)swapper.key[which]) != i);
+                *last[i] = swapper;
+            }
+            ++last[i];
+        }
+    }
+
+    if (which < NB_KEY - 1) {
+        for (int i = 0; i < BYTE_SIZE; ++i) {
+            if (count[i] > 1) {
+                radix_sort(last[i - 1], last[i] - last[i - 1], which + 1);
+            }
         }
     }
 }
