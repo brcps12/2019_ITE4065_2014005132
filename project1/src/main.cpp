@@ -135,7 +135,7 @@ size_t read_records(FILE *in, void *buf, size_t len) {
 // }
 
 inline void radix_sort(record_t *buf, int len, int which) {
-    if (len < 1000) {
+    if (len < 100) {
         std::sort(buf, buf + len, [which](record_t &a, record_t &b) {
             return memcmp(&a.key[which], &b.key[which], NB_KEY - which) < 0;
         });
@@ -177,6 +177,7 @@ inline void radix_sort(record_t *buf, int len, int which) {
     }
 
     if (which < NB_KEY - 1) {
+        #pragma omp parallel for shared(count, last, which)
         for (int i = 0; i < BYTE_SIZE; ++i) {
             if (count[i] > 1) {
                 radix_sort(last[i - 1], last[i] - last[i - 1], which + 1);
@@ -456,7 +457,6 @@ int main(int argc, char* argv[]) {
         for (off_t i = 0; i < num_partition; i++) {
             sprintf(name, TMPFILE_NAME, i);
             buffered_close(tmpfiles[i]);
-            remove(name);
         }
         free(tmpfiles);
     }
