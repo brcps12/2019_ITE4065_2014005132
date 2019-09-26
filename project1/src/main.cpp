@@ -4,14 +4,14 @@
 #include <unistd.h>
 #include <sys/types.h>
 #include <fcntl.h>
-#include <assert.h>
+// #include <assert.h>
 #include <string.h>
-#include <sys/time.h>
+// #include <sys/time.h>
 #include <queue>
 #include <algorithm>
 #include <vector>
 
-#include <time_chk.hpp>
+// #include <time_chk.hpp>
 #include <mytypes.hpp>
 #include <bufio.hpp>
 
@@ -135,7 +135,7 @@ size_t read_records(FILE *in, void *buf, size_t len) {
 // }
 
 inline void radix_sort(record_t *buf, int len, int which) {
-    if (len < 100) {
+    if (len < 1000) {
         std::sort(buf, buf + len, [which](record_t &a, record_t &b) {
             return memcmp(&a.key[which], &b.key[which], NB_KEY - which) < 0;
         });
@@ -307,11 +307,10 @@ inline void kway_external_merge(buffered_io_fd **tmpfiles, buffered_io_fd *out, 
     size_t bufsiz = record_buf_size / (NB_RECORD * k);
     std::priority_queue<heap_item_t, std::vector<heap_item_t>, heap_comparison> q;
     for (int i = k - 1; i >= 0; i--) {
-        get_fstat(tmpfiles[i]);
         if (i == 0) {
             sizs[i] = rmsiz / NB_RECORD;
         } else {
-            sizs[i] = min(tmpfiles[i]->st.st_size / NB_RECORD, max_bufsiz);
+            sizs[i] = min(get_filesize(tmpfiles[i]) / NB_RECORD, max_bufsiz);
         }
         
         // printf("%d %llu\n", i, sizs[i]);
@@ -330,7 +329,7 @@ inline void kway_external_merge(buffered_io_fd **tmpfiles, buffered_io_fd *out, 
             buffered_append(out, p.record, sizeof(record_t));
             buffered_flush(out);
             size_t kk = p.k;
-            size_t insize = tmpfiles[kk]->st.st_size;
+            size_t insize = get_filesize(tmpfiles[kk]);
             int fd = tmpfiles[kk]->fd;
             off_t inoff = tmpfiles[kk]->offset, outoff = out->offset;
             outoff += pwrite(out->fd, ptrs[kk], remains[kk] * NB_RECORD, outoff);

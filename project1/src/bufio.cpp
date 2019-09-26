@@ -60,6 +60,9 @@ ssize_t buffered_append(buffered_io_fd *fd, void *buf, size_t nbytes) {
     fd->written += nbytes;
 }
 
-void get_fstat(buffered_io_fd *fd) {
-    fstat(fd->fd, &fd->st);
+size_t get_filesize(buffered_io_fd *fd) {
+    off_t o = lseek(fd->fd, 0, SEEK_CUR);
+    size_t file_size = lseek(fd->fd, 0, SEEK_END);
+    lseek(fd->fd, o, SEEK_SET);
+    return file_size;
 }

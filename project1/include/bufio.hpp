@@ -25,6 +25,6 @@ ssize_t buffered_read(buffered_io_fd *fd, void *buf, size_t nbytes);
 
 ssize_t buffered_append(buffered_io_fd *fd, void *buf, size_t nbytes);
 
-void get_fstat(buffered_io_fd *fd);
+size_t get_filesize(buffered_io_fd *fd);
 
 #endif
