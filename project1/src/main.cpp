@@ -134,65 +134,6 @@ size_t read_records(FILE *in, void *buf, size_t len) {
 //     partially_quicksort(records, j, end);
 // }
 
-void read_and_sort(off_t start, off_t offset, size_t maxlen) {
-    // time_interval_t tin;
-    // begin_time_track(&tin);
-    // len = read_records(fin, record_buf + start, len);
-    size_t readbytes = pread(input_fd, record_buf + start, maxlen * NB_RECORD, (offset + start) * NB_RECORD);
-    size_t len = readbytes / NB_RECORD;
-    // stop_and_print_interval(&tin, "Read");
-
-    // begin_time_track(&tin);
-    // std::sort(record_offs + start, record_offs + start + len, compare_for_sort);
-    std::sort(record_buf + start, record_buf + start + len, record_comparison);
-    // qsort(record_buf + start, len, sizeof(record_t), compare_record);
-    // qsort(record_offs + start, len, sizeof(off_t), compare);
-    // partially_quicksort(record_buf, start, start + len - 1);
-    // stop_and_print_interval(&tin, "Each Part Sort");
-}
-
-// void twoway_merge(off_t *offin, off_t *offout, off_t start, off_t mid, off_t end) {
-//     off_t l = start, r = mid + 1, i = start;
-
-//     while (l <= mid && r <= end) {
-//         int res = compare(offin + l, offin + r);
-//         if (res < 0) {
-//             offout[i++] = offin[l++];
-//         } else {
-//             offout[i++] = offin[r++];
-//         }
-//     }
-
-//     while (l <= mid) {
-//         offout[i++] = offin[l++];
-//     }
-
-//     while (r <= end) {
-//         offout[i++] = offin[r++];
-//     }
-// }
-
-void kway_merge(buffered_io_fd *out, record_t *rin, size_t buflen, off_t k, off_t len) {
-    record_t *mxidx[k], *ptrs[k];
-    std::priority_queue<heap_item_t, std::vector<heap_item_t>, heap_comparison> q;
-    for (int i = 0; i < k; i++) {
-        mxidx[i] = min(rin + buflen, rin + (i + 1) * len);
-        ptrs[i] = rin + i * len;
-        q.push({ ptrs[i], i });
-    }
-
-    while (!q.empty()) {
-        heap_item_t p = q.top();
-        q.pop();
-        buffered_append(out, p.record, sizeof(record_t));
-        ++ptrs[p.k];
-        if (ptrs[p.k] != mxidx[p.k]) {
-            q.push({ ptrs[p.k], p.k });
-        }
-    }
-}
-
-
 inline void radix_sort(record_t *buf, int len, int which) {
     if (len < 1000) {
         std::sort(buf, buf + len, [which](record_t &a, record_t &b) {
@@ -240,6 +181,65 @@ inline void radix_sort(record_t *buf, int len, int which) {
             if (count[i] > 1) {
                 radix_sort(last[i - 1], last[i] - last[i - 1], which + 1);
             }
+        }
+    }
+}
+
+void read_and_sort(off_t start, off_t offset, size_t maxlen) {
+    // time_interval_t tin;
+    // begin_time_track(&tin);
+    // len = read_records(fin, record_buf + start, len);
+    size_t readbytes = pread(input_fd, record_buf + start, maxlen * NB_RECORD, (offset + start) * NB_RECORD);
+    size_t len = readbytes / NB_RECORD;
+    // stop_and_print_interval(&tin, "Read");
+
+    // begin_time_track(&tin);
+    // std::sort(record_offs + start, record_offs + start + len, compare_for_sort);
+    radix_sort(record_buf + start, len, 0);
+    // std::sort(record_buf + start, record_buf + start + len, record_comparison);
+    // qsort(record_buf + start, len, sizeof(record_t), compare_record);
+    // qsort(record_offs + start, len, sizeof(off_t), compare);
+    // partially_quicksort(record_buf, start, start + len - 1);
+    // stop_and_print_interval(&tin, "Each Part Sort");
+}
+
+// void twoway_merge(off_t *offin, off_t *offout, off_t start, off_t mid, off_t end) {
+//     off_t l = start, r = mid + 1, i = start;
+
+//     while (l <= mid && r <= end) {
+//         int res = compare(offin + l, offin + r);
+//         if (res < 0) {
+//             offout[i++] = offin[l++];
+//         } else {
+//             offout[i++] = offin[r++];
+//         }
+//     }
+
+//     while (l <= mid) {
+//         offout[i++] = offin[l++];
+//     }
+
+//     while (r <= end) {
+//         offout[i++] = offin[r++];
+//     }
+// }
+
+void kway_merge(buffered_io_fd *out, record_t *rin, size_t buflen, off_t k, off_t len) {
+    record_t *mxidx[k], *ptrs[k];
+    std::priority_queue<heap_item_t, std::vector<heap_item_t>, heap_comparison> q;
+    for (int i = 0; i < k; i++) {
+        mxidx[i] = min(rin + buflen, rin + (i + 1) * len);
+        ptrs[i] = rin + i * len;
+        q.push({ ptrs[i], i });
+    }
+
+    while (!q.empty()) {
+        heap_item_t p = q.top();
+        q.pop();
+        buffered_append(out, p.record, sizeof(record_t));
+        ++ptrs[p.k];
+        if (ptrs[p.k] != mxidx[p.k]) {
+            q.push({ ptrs[p.k], p.k });
         }
     }
 }
