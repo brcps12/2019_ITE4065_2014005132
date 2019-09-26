@@ -1,38 +1,26 @@
-#ifndef __BUFIO_H
-#define __BUFIO_H
+#ifndef __BUFIO_HPP
+#define __BUFIO_HPP
 #include <sys/types.h>
 #include <mytypes.hpp>
 
-class BufferedIO {
-private:
+typedef struct {
     int fd;
     size_t bufsiz, written;
     off_t offset;
     byte *buf;
     byte *ptr;
-public:
-    BufferedIO() {
-        bufsiz = 0;
-        reset();
-    }
+} buffered_io_fd;
 
-    void reset();
+void buffered_reset(buffered_io_fd *fd);
 
-    void openfile(const char *path, int mod);
+buffered_io_fd * buffered_open(const char* path, int mode, byte* buf, size_t bufsiz);
 
-    void closefile();
+void buffered_flush(buffered_io_fd *fd);
 
-    void flush();
+void buffered_close(buffered_io_fd *fd);
 
-    ssize_t read(void *buf, size_t nbytes);
+ssize_t buffered_read(buffered_io_fd *fd, void *buf, size_t nbytes);
 
-    ssize_t append(void *buf, size_t nbytes);
-
-    int getfd();
-
-    void setbuf(byte *buf, size_t bufsiz);
-
-    size_t filesize();
-};
+ssize_t buffered_append(buffered_io_fd *fd, void *buf, size_t nbytes);
 
 #endif

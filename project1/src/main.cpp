@@ -2,61 +2,57 @@
 #include <stdlib.h>
 #include <omp.h>
 #include <unistd.h>
+#include <sys/types.h>
 #include <fcntl.h>
 #include <assert.h>
 #include <string.h>
-#include <math.h>
-#include <time.h>
-#include <sys/mman.h>
-#include <sys/types.h>
 #include <sys/time.h>
-
-#include <iostream>
-#include <fstream>
 #include <queue>
 #include <algorithm>
-#include <iterator>
 #include <vector>
 
-#include <mytypes.hpp>
-#include <myutil.hpp>
 #include <time_chk.hpp>
+#include <mytypes.hpp>
 #include <bufio.hpp>
 
-using namespace std;
+#define max(a, b) ((a) > (b) ? (a) : (b))
+#define min(a, b) ((a) < (b) ? (a) : (b))
 
-#define THRESHOLD_SORT 1000000
-#define MAX_THREAD_NUM 8
-#define BYTE_SIZE 256
+#define RECORD_THRESHOLD 1000000
 
+#define NUM_OF_THREADS (80)
 // It can be set in dynamically: currently 80% of total(=2g)
 #define MAX_MEMSIZ_FOR_DATA ((size_t)(0.9 * 2 * GB))
 // #define MAX_MEMSIZ_FOR_DATA ((size_t)(300 * MB))
 // #define MAX_MEMSIZ_FOR_DATA ((size_t)(200))
-
-#define INPUT_BUFSIZ (128 * MB)
-#define OUTPUT_BUFSIZ (128 * MB)
+#define MAX_RECORD_NUM ((size_t)(MEMSIZ_FOR_DATA / NB_RECORD))
+#define INPUT_BUFSIZ (64 * MB)
+#define OUTPUT_BUFSIZ (64 * MB)
 
 #define TMPFILE_NAME "tmp.%d"
 
 typedef struct {
     record_t *record;
-    int k;
+    off_t k;
 } heap_item_t;
 
-BufferedIO input, output;
+int input_fd;
+buffered_io_fd *fout;
+// FILE *fout;
 
+size_t record_buf_size;
 size_t file_size, total_records;
 
-size_t recbuf_size;
-record_t *recbuf;
+byte *inbuf[2];
+byte *outbuf;
+record_t *record_buf;
 
-size_t outbuf_size;
-record_t *outbuf;
+buffered_io_fd **tmpfiles;
+// FILE **tmpfiles;
 
-record_t *inmap, *outmap;
-
-BufferedIO *tmpfiles;
+bool record_comparison(record_t &a, record_t &b) {
+    return memcmp(&a, &b, NB_KEY) < 0;
+}
 
 class heap_comparison {
 public:
@@ -65,61 +61,117 @@ public:
     }
 };
 
-inline bool record_comparison(const record_t &a, const record_t &b) {
-    return memcmp(&a, &b, NB_KEY) < 0;
+int compare_record(const void *a, const void *b) {
+    return memcmp(a, b, NB_KEY);
 }
 
-inline void read_records(record_t *buf, size_t len, off_t offset) {
-    // memcpy(buf, inmap + offset, len * NB_RECORD);
-    pread(input.getfd(), buf, len * NB_RECORD, offset * NB_RECORD);
+/*
+int compare_record(const record_t *a, const record_t *b) {
+    return memcmp(a, b, NB_KEY);
 }
 
-inline void radix_sort(record_t *buf, int len, int which) {
-    // use 1 byte
-    record_t *last_[BYTE_SIZE + 1];
-    record_t **last = last_ + 1;
-    int count[BYTE_SIZE] = { 0, };
-
-    for (record_t *ptr = buf; ptr < buf + len; ++ptr) {
-        ++count[(unsigned char)ptr->key[which]];
-    }
-
-    last_[0] = last_[1] = buf;
-    for (int i = 1; i < BYTE_SIZE; ++i) {
-        last[i] = last[i-1] + count[i-1];
-    }
-
-    record_t *e = buf + len;
-    for (int i = 0; i < BYTE_SIZE; ++i) {
-        record_t *end = last[i-1] + count[i];
-        if (end == e) { 
-            last[i] = buf + len;
-            break;
-        }
-
-        while (last[i] != end) {
-            record_t swapper = *last[i];
-            unsigned char tag = (unsigned char)swapper.key[which];
-            if (tag != i) {
-                do {
-                    swap(swapper, *last[tag]++);
-                } while ((tag = (unsigned char)swapper.key[which]) != i);
-                *last[i] = swapper;
-            }
-            ++last[i];
-        }
-    }
-
-    if (which < NB_KEY - 1) {
-        for (int i = 0; i < BYTE_SIZE; ++i) {
-            if (count[i] > 1) {
-                radix_sort(last[i - 1], last[i] - last[i - 1], which + 1);
-            }
-        }
-    }
+int compare(const void *a, const void *b) {
+    return compare_record(record_buf + *(off_t*)a, record_buf + *(off_t*)b);
 }
 
-void kway_merge(BufferedIO &out, record_t *rin, size_t buflen, off_t k, off_t len) {
+int compare_heap_item(const heap_item_t &a, const heap_item_t &b) {
+    return compare_record(a.record, b.record);
+}
+
+int compare_for_sort(const off_t *a, const off_t *b) {
+    return compare_record(record_buf + *a, record_buf + *b) < 0;
+}
+
+int compare_record_for_sort(const record_t &a, const record_t &b) {
+    return compare_record(&a, &b) < 0;
+}
+*/
+
+void swap(void **a, void **b) {
+    void *tmp = *a;
+    *a = *b;
+    *b = tmp;
+}
+
+size_t read_records(FILE *in, void *buf, size_t len) {
+    return fread(buf, NB_RECORD, len, in);
+}
+
+// void partially_partition(record_t *records, off_t start, off_t end, off_t *i, off_t *j) {
+//     if (end - start <= 1) {
+//         if (compare_record(&records[start], &records[end]) > 0) {
+//             std::swap(records[start], records[end]);
+//         }
+//         *i = start,
+//         *j = end;
+//         return;
+//     }
+//     off_t it = start;
+//     record_t pivot = records[start]; // todo: optimize
+//     while (it <= end) {
+//         int cmp = compare_record(&records[it], &pivot);
+//         if (cmp < 0) {
+//             std::swap(records[start], records[it]);
+//             ++start, ++it;
+//         } else if (cmp == 0) {
+//             ++it;
+//         } else {
+//             std::swap(records[it], records[end]);
+//             --end;
+//         }
+//     }
+//     *i = start - 1;
+//     *j = it;
+// }
+
+// void partially_quicksort(record_t *records, off_t start, off_t end) {
+//     if (start >= end) return;
+//     off_t i, j; 
+    
+//     partially_partition(records, start, end, &i, &j);
+//     partially_quicksort(records, start, i);
+//     partially_quicksort(records, j, end);
+// }
+
+void read_and_sort(off_t start, off_t offset, size_t maxlen) {
+    // time_interval_t tin;
+    // begin_time_track(&tin);
+    // len = read_records(fin, record_buf + start, len);
+    size_t readbytes = pread(input_fd, record_buf + start, maxlen * NB_RECORD, (offset + start) * NB_RECORD);
+    size_t len = readbytes / NB_RECORD;
+    // stop_and_print_interval(&tin, "Read");
+
+    // begin_time_track(&tin);
+    // std::sort(record_offs + start, record_offs + start + len, compare_for_sort);
+    std::sort(record_buf + start, record_buf + start + len, record_comparison);
+    // qsort(record_buf + start, len, sizeof(record_t), compare_record);
+    // qsort(record_offs + start, len, sizeof(off_t), compare);
+    // partially_quicksort(record_buf, start, start + len - 1);
+    // stop_and_print_interval(&tin, "Each Part Sort");
+}
+
+// void twoway_merge(off_t *offin, off_t *offout, off_t start, off_t mid, off_t end) {
+//     off_t l = start, r = mid + 1, i = start;
+
+//     while (l <= mid && r <= end) {
+//         int res = compare(offin + l, offin + r);
+//         if (res < 0) {
+//             offout[i++] = offin[l++];
+//         } else {
+//             offout[i++] = offin[r++];
+//         }
+//     }
+
+//     while (l <= mid) {
+//         offout[i++] = offin[l++];
+//     }
+
+//     while (r <= end) {
+//         offout[i++] = offin[r++];
+//     }
+// }
+
+void kway_merge(buffered_io_fd *out, record_t *rin, size_t buflen, off_t k, off_t len) {
     record_t *mxidx[k], *ptrs[k];
     std::priority_queue<heap_item_t, std::vector<heap_item_t>, heap_comparison> q;
     for (int i = 0; i < k; i++) {
@@ -131,7 +183,7 @@ void kway_merge(BufferedIO &out, record_t *rin, size_t buflen, off_t k, off_t le
     while (!q.empty()) {
         heap_item_t p = q.top();
         q.pop();
-        out.append(p.record, sizeof(record_t));
+        buffered_append(out, p.record, sizeof(record_t));
         ++ptrs[p.k];
         if (ptrs[p.k] != mxidx[p.k]) {
             q.push({ ptrs[p.k], p.k });
@@ -139,66 +191,50 @@ void kway_merge(BufferedIO &out, record_t *rin, size_t buflen, off_t k, off_t le
     }
 }
 
-inline void sort_phase(BufferedIO &out, int recnum, off_t offset) {
-    TimeTracker tracker;
-    tracker.start();
+void partial_sort(buffered_io_fd *out, off_t offset, size_t num_records) {
+    // time_interval_t tin;
+    // begin_time_track(&tin);
     #pragma omp parallel for
-    for (off_t start = 0; start < recnum; start += THRESHOLD_SORT) {
-        size_t maxlen = start + THRESHOLD_SORT >= recnum ? recnum - start : THRESHOLD_SORT;
-        read_records(recbuf + start, maxlen, offset + start);
-        radix_sort(recbuf + start, maxlen, 0);
+    for (off_t start = 0; start < num_records; start += RECORD_THRESHOLD) {
+        size_t maxlen = start + RECORD_THRESHOLD >= num_records ? num_records - start : RECORD_THRESHOLD;
+        read_and_sort(start, offset, maxlen);
     }
-    tracker.stopAndPrint("Read And Sort");
+    // stop_and_print_interval(&tin, "All Partially Sorted");
+    
+    // begin_time_track(&tin);
+    int k = num_records / RECORD_THRESHOLD + (num_records % RECORD_THRESHOLD != 0);
+    // for (size_t mlen = RECORD_THRESHOLD; mlen < num_records; mlen <<= 1) {
+    //     #pragma omp parallel for
+    //     for (off_t start = 0; start < num_records; start += (mlen << 1)) {
+    //         off_t end = start + (mlen << 1) - 1;
+    //         off_t mid = start + mlen - 1;
+    //         if (mid >= num_records) {
+    //             mid = end = num_records - 1;
+    //         } else if (end >= num_records) {
+    //             end = num_records - 1;
+    //         }
 
-    tracker.start();
-    int k = recnum / THRESHOLD_SORT + (recnum % THRESHOLD_SORT != 0);
-    kway_merge(out, recbuf, recnum, k, THRESHOLD_SORT);
+    //         twoway_merge(offin, offout, start, mid, end);
+    //     }
 
-    out.flush();
-    tracker.stopAndPrint("Merge And Write");
+    //     swap((void**)&offin, (void**)&offout);
+    // }
+    kway_merge(out, record_buf, num_records, k, RECORD_THRESHOLD);
+    // stop_and_print_interval(&tin, "Merge");
+    
+    // begin_time_track(&tin);
+    // for (off_t i = 0; i < num_records; i ++) {
+    //     off_t idx = offin[i];
+    //     fwrite(record_buf + idx, NB_RECORD, 1, out);
+    // }
+
+    buffered_flush(out);
+    // stop_and_print_interval(&tin, "File write");
 }
 
-void partially_quicksort(record_t *records, int start, off_t end) {
-    if (end - start <= THRESHOLD_SORT) {
-        std::sort(records + start, records + end + 1, record_comparison);
-    } else {
-        if (start >= end) return;
-        off_t i, j; 
-            
-        rec_key_t pivot;
-        memcpy(&pivot, &records[start + (end - start + 1) / 2].key, NB_KEY);
-        record_t *ptr = std::partition(records + start, records + end + 1, [pivot](const record_t &a) -> bool { 
-            return memcmp(&a, &pivot, NB_KEY) < 0;
-        });
-        // partially_partition(records, start, end, &i, &j);
-
-        #pragma omp task
-        {
-            // partially_quicksort(records, start, i);
-            partially_quicksort(records, start, (ptr - records) - 1);
-        }
-
-        #pragma omp task
-        {
-            // partially_quicksort(records, j, end);
-            partially_quicksort(records, (ptr - records), end);
-        }
-    }
-}
-
-void parallel_quicksort(record_t *records, off_t start, off_t end) {
-    #pragma omp parallel
-    {
-        #pragma omp single nowait
-        {
-            partially_quicksort(records, start, end);
-        }
-    }
-}
-
-record_t *get_next_record(BufferedIO &in, record_t *buf, record_t **ptr, size_t bufsiz, ssize_t *remain) {
+record_t *get_next_record(buffered_io_fd *in, record_t *buf, record_t **ptr, size_t bufsiz, ssize_t *remain) {
     if (*remain == 0) {
-        *remain = in.read(buf, bufsiz * NB_RECORD) / NB_RECORD;
+        *remain = buffered_read(in, buf, bufsiz * NB_RECORD) / NB_RECORD;
         if (*remain <= 0) return NULL;
         *ptr = buf;
     }
@@ -208,15 +244,13 @@ record_t *get_next_record(BufferedIO &in, record_t *buf, record_t **ptr, size_t 
     return *ptr - 1;
 }
 
-void kway_external_merge(BufferedIO tmpfiles[], BufferedIO &out, int k) {
-    TimeTracker tracker;
-    tracker.start();
+void kway_external_merge(buffered_io_fd **tmpfiles, buffered_io_fd *out, size_t k) {
     record_t *bufs[k], *ptrs[k], *record;
     ssize_t remains[k] = { 0, };
-    size_t bufsiz = recbuf_size / (NB_RECORD * k);
+    size_t bufsiz = record_buf_size / (NB_RECORD * k);
     std::priority_queue<heap_item_t, std::vector<heap_item_t>, heap_comparison> q;
     for (int i = 0; i < k; i++) {
-        bufs[i] = recbuf + i * bufsiz;
+        bufs[i] = record_buf + i * bufsiz;
         record = get_next_record(tmpfiles[i], bufs[i], &ptrs[i], bufsiz, &remains[i]);
         q.push({ record, i });
     }
@@ -224,97 +258,165 @@ void kway_external_merge(BufferedIO tmpfiles[], BufferedIO &out, int k) {
     while (!q.empty()) {
         heap_item_t p = q.top();
         q.pop();
-        out.append(p.record, sizeof(record_t));
+        buffered_append(out, p.record, sizeof(record_t));
         record = get_next_record(tmpfiles[p.k], bufs[p.k], &ptrs[p.k], bufsiz, &remains[p.k]);
         if (record != NULL) {
             q.push({ record, p.k });
         }
     }
-
-    out.flush();
-    tracker.stopAndPrint("External Merge");
+    buffered_flush(out);
 }
 
-int main(int argc, char* argv[]) {
-    srand(time(NULL));
+// void external_merge(buffered_io_fd *fin_left, buffered_io_fd *fin_right, buffered_io_fd *fout) {
+//     // simple
+//     time_interval_t tin;
+//     begin_time_track(&tin);
+
+//     size_t bufsiz = record_buf_size / (NB_RECORD * 2);
+//     size_t lremain = 0, rremain = 0;
+//     record_t *lbuf = record_buf, *rbuf = record_buf + bufsiz;
+//     record_t *lp = NULL, *rp = NULL;
+//     record_t *l = get_next_record(fin_left, lbuf, &lp, bufsiz, &lremain);
+//     record_t *r = get_next_record(fin_right, rbuf, &rp, bufsiz, &rremain);
     
+//     // record_t prev, cur;
+//     // size_t it = 0;
+//     while (l && r) {
+//         // prev = cur;
+//         if (record_comparison(*l, *r)) {
+//             // fwrite(l, NB_RECORD, 1, fout);
+//             buffered_append(fout, l, NB_RECORD);
+//             // cur = *l;
+//             l = get_next_record(fin_left, lbuf, &lp, bufsiz, &lremain);
+//         } else {
+//             // fwrite(r, NB_RECORD, 1, fout);
+//             buffered_append(fout, r, NB_RECORD);
+//             // cur = *r;
+//             r = get_next_record(fin_right, rbuf, &rp, bufsiz, &rremain);
+//         }
+//         // ++it;
+
+//         // if (it > 1) {
+//             // assert(compare_record(&prev, &cur) <= 0);
+//         // }
+//     }
+
+//     while (l) {
+//         // prev = cur;
+//         buffered_append(fout, l, NB_RECORD);
+//         // cur = *l;
+//         l = get_next_record(fin_left, lbuf, &lp, bufsiz, &lremain);
+//         // ++it;
+
+//         // if (it > 1) {
+//             // assert(compare_record(&prev, &cur) <= 0);
+//         // }
+//     }
+
+//     while (r) {
+//         // prev = cur;
+//         buffered_append(fout, r, NB_RECORD);
+//         // cur = *r;
+//         r = get_next_record(fin_right, rbuf, &rp, bufsiz, &rremain);
+//         // ++it;
+
+//         // if (it > 1) {
+//             // assert(compare_record(&prev, &cur) <= 0);
+//         // }
+//     }
+    
+//     // fflush(fout);
+//     buffered_flush(fout);
+//     stop_and_print_interval(&tin, "External Merge");
+// }
+
+int main(int argc, char* argv[]) {
     if (argc < 3) {
         printf("usage: %s <path to input> <path to output>\n", argv[0]);
         return 0;
     }
 
-    TimeTracker tracker;
-    // prepare input file
-    input.openfile(argv[1], O_RDONLY);
+#ifdef LOCAL_TEST
+    printf("This runs in local test only\n");
+    // char *num_thread = getenv("MP_NUM_OF_THREAD");
+    // omp_set_num_threads(atoi(num_thread));
+#else
+    // omp_set_num_threads(NUM_OF_THREADS);
+#endif
 
-    file_size = input.filesize();
+    inbuf[0] = (byte*)malloc(INPUT_BUFSIZ);
+    inbuf[1] = (byte*)malloc(INPUT_BUFSIZ);
+    outbuf = (byte*)malloc(OUTPUT_BUFSIZ);
+    input_fd = open(argv[1], O_RDONLY);
+    if (input_fd == -1) {
+        printf("error: cannot open file\n");
+        return -1;
+    }
+
+    file_size = lseek(input_fd, 0, SEEK_END);
     total_records = file_size / NB_RECORD;
 
-    // prepare output file
-    output.openfile(argv[2], O_CREAT | O_RDWR | O_TRUNC);
-    pwrite(output.getfd(), "", 1, file_size - 1);
+    fout = buffered_open(argv[2], O_RDWR | O_CREAT | O_TRUNC, outbuf, OUTPUT_BUFSIZ);
+    // fout = fopen(argv[2], "wb+");
+    if (fout == NULL) {
+        printf("error: cannot create output file\n");
+        return -1;
+    }
 
-    inmap = (record_t *)mmap(NULL, file_size, PROT_READ, MAP_SHARED, input.getfd(), 0);
-    outmap = (record_t *)mmap(NULL, file_size, PROT_READ | PROT_WRITE, MAP_SHARED, output.getfd(), 0);
+    pwrite(fout->fd, "\0", 1, file_size - 1);
 
-    recbuf_size = min(MAX_MEMSIZ_FOR_DATA, file_size);
-    recbuf = (record_t *)malloc(recbuf_size);
+    record_buf_size = min(total_records * NB_RECORD, MAX_MEMSIZ_FOR_DATA);
+    record_buf = (record_t*)malloc(record_buf_size);
 
-    outbuf_size = file_size > MAX_MEMSIZ_FOR_DATA ? OUTPUT_BUFSIZ : max(OUTPUT_BUFSIZ, MAX_MEMSIZ_FOR_DATA - file_size);
-    outbuf = (record_t *)malloc(outbuf_size);
+    size_t num_record_for_partition = record_buf_size / NB_RECORD;
+    size_t num_partition = total_records / num_record_for_partition + (total_records % num_record_for_partition != 0);
 
-    output.setbuf((byte *)outbuf, outbuf_size);
-
-    int num_record_in_partiiton = recbuf_size / NB_RECORD;
-    int num_partition = total_records / num_record_in_partiiton + (total_records % num_record_in_partiiton != 0);
-
-    if (num_partition == 1) {
-        // it can be sorted in-memory
-        sort_phase(output, total_records, 0);
+    if (num_partition <= 1) {
+        // setvbuf(fout, outbuf, _IOFBF, OUTPUT_BUFSIZ);
+        partial_sort(fout, 0, total_records);
     } else {
-        tmpfiles = new BufferedIO[num_partition];
+        tmpfiles = (buffered_io_fd **)malloc(num_partition * sizeof(buffered_io_fd*));
         char name[15];
         for (int i = 0; i < num_partition; i++) {
             sprintf(name, TMPFILE_NAME, i);
-            tmpfiles[i].openfile(name, O_RDWR | O_CREAT | O_TRUNC);
-            tmpfiles[i].setbuf((byte *)outbuf, outbuf_size);
+            tmpfiles[i] = buffered_open(name, O_RDWR | O_CREAT | O_TRUNC, outbuf, OUTPUT_BUFSIZ);
+            // tmpfiles[i] = fopen(name, "wb+");
         }
 
         int tidx = 0;
-        for (off_t offset = 0; offset < total_records; offset += num_record_in_partiiton, ++tidx) {
-            size_t recnum = min((size_t)(offset + num_record_in_partiiton), (size_t)total_records) - offset;
-            sort_phase(tmpfiles[tidx], recnum, offset);
+        for (off_t offset = 0; offset < total_records; offset += num_record_for_partition, ++tidx) {
+            size_t num_records = min(offset + num_record_for_partition, total_records) - offset;
+            partial_sort(tmpfiles[tidx], offset, num_records);
         }
 
         for (int i = 0; i < num_partition; i++) {
-            tmpfiles[i].reset();
+            buffered_reset(tmpfiles[i]);
         }
-        
-        kway_external_merge(tmpfiles, output, num_partition);
+        kway_external_merge(tmpfiles, fout, num_partition);
     }
-    
-    tracker.start();
-    // msync(out, file_size, MS_SYNC);
 
-    // release
-    input.closefile();
-    output.closefile();
-    munmap(inmap, file_size);
-    munmap(outmap, file_size);
-
+    close(input_fd);
+    // time_interval_t tin;
+    // begin_time_track(&tin);
     if (num_partition > 1) {
         char name[15];
         for (off_t i = 0; i < num_partition; i++) {
             sprintf(name, TMPFILE_NAME, i);
-            tmpfiles[i].closefile();
+            buffered_close(tmpfiles[i]);
+            remove(name);
         }
-
-        delete tmpfiles;
+        free(tmpfiles);
     }
+    // stop_and_print_interval(&tin, "Flush File");
 
+    // begin_time_track(&tin);
+    buffered_close(fout);
+    // stop_and_print_interval(&tin, "Flush File");
+
+    free(inbuf[0]);
+    free(inbuf[1]);
     free(outbuf);
-    free(recbuf);
-    tracker.stopAndPrint("Write Time");
+    free(record_buf);
 
     return 0;
 }

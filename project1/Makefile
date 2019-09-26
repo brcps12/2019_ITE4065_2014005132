@@ -2,7 +2,7 @@
 CC = g++
 CXXFLAGS = -Wall -Wno-sign-compare -DLOCAL_TEST
 
-CXXFLAGS += -O3
+CXXFLAGS += -O2
 #CXXFLAGS += -g
 
 # Macros specifying path for compile.

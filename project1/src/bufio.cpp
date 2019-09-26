@@ -2,64 +2,60 @@
 #include <unistd.h>
 #include <string.h>
 #include <fcntl.h>
-#include <sys/stat.h>
 #include <bufio.hpp>
 
-void BufferedIO::openfile(const char *path, int mode) {
-    this->fd = open(path, mode, 0777);
-    this->reset();
+void buffered_reset(buffered_io_fd *fd) {
+    fd->offset = 0;
+    fd->written = 0;
+    fd->ptr = fd->buf;
 }
 
-void BufferedIO::closefile() {
-    close(this->fd);
+buffered_io_fd * buffered_open(const char* path, int mode, byte* buf, size_t bufsiz) {
+    buffered_io_fd *io = (buffered_io_fd*)malloc(sizeof(buffered_io_fd));
+    if (io == NULL) return NULL;
+    int fd = open(path, mode, 0777);
+    if (fd < 0) return NULL;
+    io->bufsiz = bufsiz;
+    io->fd = fd;
+    io->buf = buf;
+    buffered_reset(io);
+    return io;
 }
 
-void BufferedIO::flush() {
-    if (this->written > 0) {
-        pwrite(this->fd, this->buf, this->written, this->offset);
-        this->offset += this->written;
-        this->written = 0;
-        this->ptr = this->buf;
+void buffered_flush(buffered_io_fd *fd) {
+    if (fd->written > 0) {
+        pwrite(fd->fd, fd->buf, fd->written, fd->offset);
+        fd->offset += fd->written;
+        fd->written = 0;
+        fd->ptr = fd->buf;
     }
 }
 
-void BufferedIO::setbuf(byte *buf, size_t bufsiz) {
-    this->bufsiz = bufsiz;
-    this->buf = buf;
-    this->reset();
+void buffered_close(buffered_io_fd *fd) {
+    // buffered_flush(fd);
+    close(fd->fd);
+    free(fd);
 }
 
-void BufferedIO::reset() {
-    this->written = 0;
-    this->offset = 0;
-    this->ptr = buf;
-}
-
-ssize_t BufferedIO::read(void *buf, size_t nbytes) {
-    ssize_t readbytes = pread(this->fd, buf, nbytes, this->offset);
+ssize_t buffered_read(buffered_io_fd *fd, void *buf, size_t nbytes) {
+    ssize_t readbytes = pread(fd->fd, buf, nbytes, fd->offset);
     if (readbytes >= 0) {
-        this->offset += readbytes;
+        fd->offset += readbytes;
     }
+
     return readbytes;
 }
 
-ssize_t BufferedIO::append(void *buf, size_t nbytes) {
-    if (this->ptr >= this->buf + this->bufsiz) {
-        this->flush();
+ssize_t buffered_append(buffered_io_fd *fd, void *buf, size_t nbytes) {
+    if (fd->ptr >= fd->buf + fd->bufsiz) {
+        buffered_flush(fd);
+        pwrite(fd->fd, fd->buf, fd->written, fd->offset);
+        fd->offset += fd->written;
+        fd->written = 0;
+        fd->ptr = fd->buf;
     }
 
-    memcpy(this->ptr, buf, nbytes);
-    this->ptr += nbytes;
-    this->written += nbytes;
-    return nbytes;
-}
-
-size_t BufferedIO::filesize() {
-    struct stat st;
-    fstat(this->fd, &st);
-    return (size_t)st.st_size;
-}
-
-int BufferedIO::getfd() {
-    return this->fd;
+    memcpy(fd->ptr, buf, nbytes);
+    fd->ptr += nbytes;
+    fd->written += nbytes;
 }
