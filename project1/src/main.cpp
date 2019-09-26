@@ -344,8 +344,12 @@ inline void kway_external_merge(buffered_io_fd **tmpfiles, buffered_io_fd *out, 
             break;
         }
 
-        buffered_append(out, p.record, sizeof(record_t));
-        record = get_next_record(tmpfiles[p.k], bufs[p.k], &ptrs[p.k], sizs[p.k], &remains[p.k]);
+        record = p.record;
+        while (record != NULL && record_comparison(*record, *q.top().record)) {
+            buffered_append(out, record, sizeof(record_t));
+            record = get_next_record(tmpfiles[p.k], bufs[p.k], &ptrs[p.k], sizs[p.k], &remains[p.k]);
+        }        
+
         if (record != NULL) {
             q.push({ record, p.k });
         }
