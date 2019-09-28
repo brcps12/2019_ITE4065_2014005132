@@ -11,7 +11,7 @@
 #define NB_PAYLOAD (90)
 #define NB_RECORD (100)
 
-typedef char byte;
+typedef u_int8_t byte;
 typedef byte rec_payload_t[NB_PAYLOAD];
 typedef byte rec_key_t[NB_KEY];
 typedef unsigned long long llu;

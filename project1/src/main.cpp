@@ -52,13 +52,13 @@ buffered_io_fd **tmpfiles;
 // FILE **tmpfiles;
 
 bool record_comparison(record_t &a, record_t &b) {
-    return memcmp(&a, &b, NB_KEY) < 0;
+    return std::lexicographical_compare(a.key, a.key + 10, b.key, b.key + 10);
 }
 
 class heap_comparison {
 public:
     bool operator() (const heap_item_t &a, const heap_item_t &b) {
-        return memcmp(a.record, b.record, NB_KEY) > 0;
+        return std::lexicographical_compare(b.record->key, b.record->key + 10, a.record->key, a.record->key + 10);
     }
 };
 
@@ -248,16 +248,15 @@ void kway_merge(buffered_io_fd *out, record_t *rin, size_t buflen, off_t k, off_
 void partial_sort(buffered_io_fd *out, off_t offset, size_t num_records) {
     // time_interval_t tin;
     // begin_time_track(&tin);
-    size_t part = num_records / omp_get_max_threads() + 1;
     #pragma omp parallel for
-    for (off_t start = 0; start < num_records; start += part) {
-        size_t maxlen = start + part >= num_records ? num_records - start : part;
+    for (off_t start = 0; start < num_records; start += RECORD_THRESHOLD) {
+        size_t maxlen = start + RECORD_THRESHOLD >= num_records ? num_records - start : RECORD_THRESHOLD;
         read_and_sort(start, offset, maxlen);
     }
     // stop_and_print_interval(&tin, "All Partially Sorted");
     
     // begin_time_track(&tin);
-    int k = num_records / part + (num_records % part != 0);
+    int k = num_records / RECORD_THRESHOLD + (num_records % RECORD_THRESHOLD != 0);
     // for (size_t mlen = RECORD_THRESHOLD; mlen < num_records; mlen <<= 1) {
     //     #pragma omp parallel for
     //     for (off_t start = 0; start < num_records; start += (mlen << 1)) {
@@ -274,7 +273,7 @@ void partial_sort(buffered_io_fd *out, off_t offset, size_t num_records) {
 
     //     swap((void**)&offin, (void**)&offout);
     // }
-    kway_merge(out, record_buf, num_records, k, part);
+    kway_merge(out, record_buf, num_records, k, RECORD_THRESHOLD);
     // stop_and_print_interval(&tin, "Merge");
     
     // begin_time_track(&tin);
