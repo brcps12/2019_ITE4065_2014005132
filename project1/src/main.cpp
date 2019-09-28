@@ -18,7 +18,7 @@
 #define max(a, b) ((a) > (b) ? (a) : (b))
 #define min(a, b) ((a) < (b) ? (a) : (b))
 
-#define RECORD_THRESHOLD 1000000
+#define RECORD_THRESHOLD 100000
 #define BYTE_SIZE 256
 
 #define NUM_OF_THREADS (80)
@@ -255,9 +255,10 @@ void kway_merge(buffered_io_fd *out, record_t *rin, size_t buflen, off_t k, off_
 void partial_sort(buffered_io_fd *out, off_t offset, size_t num_records, size_t write_offset) {
     // time_interval_t tin;
     // begin_time_track(&tin);
+    size_t part = num_records / omp_get_max_threads() + 1;
     #pragma omp parallel for
-    for (off_t start = 0; start < num_records; start += RECORD_THRESHOLD) {
-        size_t maxlen = start + RECORD_THRESHOLD >= num_records ? num_records - start : RECORD_THRESHOLD;
+    for (off_t start = 0; start < num_records; start += part) {
+        size_t maxlen = start + part >= num_records ? num_records - start : part;
         pread(input_fd, record_buf + start, maxlen * NB_RECORD, (offset + start) * NB_RECORD);
         // read_and_sort(start, offset, maxlen);
     }
