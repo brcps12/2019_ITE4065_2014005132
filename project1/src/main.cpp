@@ -18,7 +18,7 @@
 #define max(a, b) ((a) > (b) ? (a) : (b))
 #define min(a, b) ((a) < (b) ? (a) : (b))
 
-#define RECORD_THRESHOLD 100000
+#define RECORD_THRESHOLD 1000000
 #define BYTE_SIZE 256
 
 #define NUM_OF_THREADS (80)
