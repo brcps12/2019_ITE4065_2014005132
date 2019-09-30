@@ -184,12 +184,16 @@ void radix_sort(record_t *buf, int len, int which) {
     }
 
     if (which < NB_KEY - 1) {
-        #pragma omp parallel for shared(count, last, which)
+        // #pragma omp parallel for shared(count, last, which)
         for (int i = 0; i < BYTE_SIZE; ++i) {
             if (count[i] > 1) {
-                radix_sort(last[i - 1], last[i] - last[i - 1], which + 1);
+                #pragma omp task
+                {
+                    radix_sort(last[i - 1], last[i] - last[i - 1], which + 1);
+                }
             }
         }
+        #pragma omp taskwait
     }
 }
 
@@ -283,7 +287,13 @@ void partial_sort(buffered_io_fd *out, off_t offset, size_t num_records, size_t 
     // }
     // kway_merge(out, record_buf, num_records, k, RECORD_THRESHOLD);
 
-    radix_sort(record_buf, num_records, 0);
+    #pragma omp parallel
+    {
+        #pragma omp single
+        {
+            radix_sort(record_buf, num_records, 0);
+        }
+    }
     // stop_and_print_interval(&tin, "Merge");
     
     // begin_time_track(&tin);
