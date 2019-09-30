@@ -59,13 +59,17 @@ buffered_io_fd **tmpfiles;
 // FILE **tmpfiles;
 
 bool record_comparison(record_t &a, record_t &b) {
-    return memcmp(&a, &b, NB_KEY) < 0;
+    int i = 0;
+    while (i < NB_KEY && a.key[i] == b.key[i]) ++i;
+    return i == NB_KEY ? false : a.key[i] < b.key[i];
 }
 
 class heap_comparison {
 public:
     bool operator() (const heap_item_t &a, const heap_item_t &b) {
-        return memcmp(a.record, b.record, NB_KEY) > 0;
+    int i = 0;
+    while (i < NB_KEY && a.record->key[i] == b.record->key[i]) ++i;
+    return i == NB_KEY ? false : a.record->key[i] > b.record->key[i];
     }
 };
 
@@ -259,9 +263,10 @@ void kway_merge(buffered_io_fd *out, record_t *rin, size_t buflen, off_t k, off_
 void partial_sort(buffered_io_fd *out, off_t offset, size_t num_records, size_t write_offset) {
     // time_interval_t tin;
     // begin_time_track(&tin);
+    size_t part = num_records / omp_get_max_threads() + 1;
     #pragma omp parallel for
-    for (off_t start = 0; start < num_records; start += RECORD_THRESHOLD) {
-        size_t maxlen = start + RECORD_THRESHOLD >= num_records ? num_records - start : RECORD_THRESHOLD;
+    for (off_t start = 0; start < num_records; start += part) {
+        size_t maxlen = start + part >= num_records ? num_records - start : part;
         pread(input_fd, record_buf + start, maxlen * NB_RECORD, (offset + start) * NB_RECORD);
         // read_and_sort(start, offset, maxlen);
     }
@@ -291,7 +296,7 @@ void partial_sort(buffered_io_fd *out, off_t offset, size_t num_records, size_t 
     tracker.start();
     #pragma omp parallel
     {
-        #pragma omp single nowait
+        #pragma omp single
         {
             radix_sort(record_buf, num_records, 0);
         }
@@ -304,7 +309,11 @@ void partial_sort(buffered_io_fd *out, off_t offset, size_t num_records, size_t 
     //     off_t idx = offin[i];
     //     fwrite(record_buf + idx, NB_RECORD, 1, out);
     // }
-    pwrite(out->fd, record_buf + write_offset, (num_records - write_offset) * NB_RECORD, 0);
+    // pwrite(out->fd, record_buf + write_offset, (num_records - write_offset) * NB_RECORD, 0);
+    record_t *record = record_buf;
+    for (int i = 0; i < num_records; i++) {
+        buffered_append(out, record, sizeof(record_t));
+    }
 
     buffered_flush(out);
     // stop_and_print_interval(&tin, "File write");
