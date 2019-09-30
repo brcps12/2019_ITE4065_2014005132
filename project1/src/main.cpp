@@ -246,8 +246,17 @@ void kway_merge(buffered_io_fd *out, record_t *rin, size_t buflen, off_t k, off_
     while (!q.empty()) {
         heap_item_t p = q.top();
         q.pop();
+        
         buffered_append(out, p.record, sizeof(record_t));
         ++ptrs[p.k];
+
+        if (q.empty()) {
+            buffered_flush(out);
+            
+            write(out->fd, ptrs[p.k], (mxidx[p.k] - ptrs[p.k]) * NB_RECORD);            
+            break;
+        }
+
         if (ptrs[p.k] != mxidx[p.k]) {
             q.push({ ptrs[p.k], p.k });
         }
@@ -319,7 +328,7 @@ record_t *get_next_record(external_t &ext) {
         #pragma omp task
         {
             buffered_read(ext.file, ext.buf[cur], ext.bufsiz[cur] * NB_RECORD);
-            // printf("%d\n", omp_get_thread_num());
+            printf("%d\n", omp_get_thread_num());
         }
 
         ext.cur ^= 1;
@@ -444,6 +453,8 @@ int main(int argc, char* argv[]) {
         printf("error: cannot open file\n");
         return -1;
     }
+
+    printf("Max Thread Num: %d\n", omp_get_max_threads());
 
     file_size = lseek(input_fd, 0, SEEK_END);
     total_records = file_size / NB_RECORD;
