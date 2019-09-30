@@ -143,7 +143,7 @@ size_t read_records(FILE *in, void *buf, size_t len) {
 // }
 
 void radix_sort(record_t *buf, int len, int which) {
-    if (len <= SORT_THRESHOLD) {
+    if (len <= 100) {
         std::sort(buf, buf + len, [which](record_t &a, record_t &b) {
             return memcmp(&a.key[which], &b.key[which], NB_KEY - which) < 0;
         });
