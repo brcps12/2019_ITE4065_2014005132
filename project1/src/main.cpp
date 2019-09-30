@@ -18,7 +18,7 @@
 #define max(a, b) ((a) > (b) ? (a) : (b))
 #define min(a, b) ((a) < (b) ? (a) : (b))
 
-#define RECORD_THRESHOLD 1000000
+#define RECORD_THRESHOLD 100000
 #define BYTE_SIZE 256
 
 #define NUM_OF_THREADS (80)
@@ -43,6 +43,7 @@ typedef struct {
     record_t *curbuf, *ptr;
     size_t bufsiz[2], num;
     ssize_t remain;
+    bool complete[2];
     int cur;
 } external_t;
 
@@ -186,7 +187,6 @@ void radix_sort(record_t *buf, int len, int which) {
     }
 
     if (which < NB_KEY - 1) {
-        #pragma omp parallel for shared(count, last, which)
         for (int i = 0; i < BYTE_SIZE; ++i) {
             if (count[i] > 1) {
                 radix_sort(last[i - 1], last[i] - last[i - 1], which + 1);
@@ -328,11 +328,12 @@ record_t *get_next_record(external_t &ext) {
         #pragma omp task
         {
             buffered_read(ext.file, ext.buf[cur], ext.bufsiz[cur] * NB_RECORD);
-            printf("%d\n", omp_get_thread_num());
+            ext.complete[cur] = true;
         }
 
         ext.cur ^= 1;
         ext.ptr = ext.buf[ext.cur];
+        while(!ext.complete[ext.cur]);
     }
 
     return ret;
@@ -528,6 +529,7 @@ int main(int argc, char* argv[]) {
         for (int i = 0; i < num_partition; i++) {
             buffered_read(exts[i].file, exts[i].buf[0], (exts[i].bufsiz[0] + exts[i].bufsiz[1]) * NB_RECORD);
             exts[i].ptr = exts[i].buf[0];
+            exts[i].complete[0] = exts[i].complete[1] = true;
         }
 
 
