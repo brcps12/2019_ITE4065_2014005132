@@ -294,7 +294,13 @@ void partial_sort(buffered_io_fd *out, off_t offset, size_t num_records, size_t 
 
     TimeTracker tracker;
     tracker.start();
-    radix_sort(record_buf, num_records, 0);
+    #pragma omp parallel
+    {
+        #pragma omp single nowait
+        {
+            radix_sort(record_buf, num_records, 0);
+        }
+    }
     tracker.stopAndPrint("Sort");
     // stop_and_print_interval(&tin, "Merge");
     
@@ -306,7 +312,7 @@ void partial_sort(buffered_io_fd *out, off_t offset, size_t num_records, size_t 
     // pwrite(out->fd, record_buf + write_offset, (num_records - write_offset) * NB_RECORD, 0);
     record_t *record = record_buf;
     for (int i = 0; i < num_records; ++i) {
-        buffered_append(out, record, sizeof(record_t));
+        buffered_append(out, record++, sizeof(record_t));
     }
 
     buffered_flush(out);
