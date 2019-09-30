@@ -11,7 +11,7 @@
 #include <algorithm>
 #include <vector>
 
-#include <time_chk.hpp>
+// #include <time_chk.hpp>
 #include <mytypes.hpp>
 #include <bufio.hpp>
 
@@ -59,17 +59,13 @@ buffered_io_fd **tmpfiles;
 // FILE **tmpfiles;
 
 bool record_comparison(record_t &a, record_t &b) {
-    int i = 0;
-    while (i < NB_KEY && a.key[i] == b.key[i]) ++i;
-    return i == NB_KEY ? false : a.key[i] < b.key[i];
+    return memcmp(&a, &b, NB_KEY) < 0;
 }
 
 class heap_comparison {
 public:
     bool operator() (const heap_item_t &a, const heap_item_t &b) {
-    int i = 0;
-    while (i < NB_KEY && a.record->key[i] == b.record->key[i]) ++i;
-    return i == NB_KEY ? false : a.record->key[i] > b.record->key[i];
+        return memcmp(a.record, b.record, NB_KEY) > 0;
     }
 };
 
@@ -193,6 +189,7 @@ void radix_sort(record_t *buf, int len, int which) {
             if (count[i] > 1) {
                 #pragma omp task
                 {
+                    if (which == 0) printf("%d\n", omp_get_thread_num());
                     radix_sort(last[i - 1], last[i] - last[i - 1], which + 1);
                 }
             }
@@ -263,10 +260,9 @@ void kway_merge(buffered_io_fd *out, record_t *rin, size_t buflen, off_t k, off_
 void partial_sort(buffered_io_fd *out, off_t offset, size_t num_records, size_t write_offset) {
     // time_interval_t tin;
     // begin_time_track(&tin);
-    size_t part = num_records / omp_get_max_threads() + 1;
     #pragma omp parallel for
-    for (off_t start = 0; start < num_records; start += part) {
-        size_t maxlen = start + part >= num_records ? num_records - start : part;
+    for (off_t start = 0; start < num_records; start += RECORD_THRESHOLD) {
+        size_t maxlen = start + RECORD_THRESHOLD >= num_records ? num_records - start : RECORD_THRESHOLD;
         pread(input_fd, record_buf + start, maxlen * NB_RECORD, (offset + start) * NB_RECORD);
         // read_and_sort(start, offset, maxlen);
     }
@@ -292,10 +288,13 @@ void partial_sort(buffered_io_fd *out, off_t offset, size_t num_records, size_t 
     // }
     // kway_merge(out, record_buf, num_records, k, RECORD_THRESHOLD);
 
-    TimeTracker tracker;
-    tracker.start();
-    radix_sort(record_buf, num_records, 0);
-    tracker.stopAndPrint("Sort");
+    #pragma omp parallel num_threads(40)
+    {
+        #pragma omp single
+        {
+            radix_sort(record_buf, num_records, 0);
+        }
+    }
     // stop_and_print_interval(&tin, "Merge");
     
     // begin_time_track(&tin);
@@ -303,11 +302,7 @@ void partial_sort(buffered_io_fd *out, off_t offset, size_t num_records, size_t 
     //     off_t idx = offin[i];
     //     fwrite(record_buf + idx, NB_RECORD, 1, out);
     // }
-    // pwrite(out->fd, record_buf + write_offset, (num_records - write_offset) * NB_RECORD, 0);
-    record_t *record = record_buf;
-    for (int i = 0; i < num_records; ++i) {
-        buffered_append(out, record++, sizeof(record_t));
-    }
+    pwrite(out->fd, record_buf + write_offset, (num_records - write_offset) * NB_RECORD, 0);
 
     buffered_flush(out);
     // stop_and_print_interval(&tin, "File write");
