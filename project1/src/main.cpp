@@ -19,6 +19,7 @@
 #define min(a, b) ((a) < (b) ? (a) : (b))
 
 #define RECORD_THRESHOLD 1000000
+#define SORT_THRESHOLD 1000
 #define BYTE_SIZE 256
 
 #define NUM_OF_THREADS (80)
@@ -142,7 +143,7 @@ size_t read_records(FILE *in, void *buf, size_t len) {
 // }
 
 void radix_sort(record_t *buf, int len, int which) {
-    if (len < 100) {
+    if (len <= SORT_THRESHOLD) {
         std::sort(buf, buf + len, [which](record_t &a, record_t &b) {
             return memcmp(&a.key[which], &b.key[which], NB_KEY - which) < 0;
         });
