@@ -287,13 +287,7 @@ void partial_sort(buffered_io_fd *out, off_t offset, size_t num_records, size_t 
     // }
     // kway_merge(out, record_buf, num_records, k, RECORD_THRESHOLD);
 
-    #pragma omp parallel num_threads(8)
-    {
-        #pragma omp single
-        {
-            radix_sort(record_buf, num_records, 0);
-        }
-    }
+    radix_sort(record_buf, num_records, 0);
     // stop_and_print_interval(&tin, "Merge");
     
     // begin_time_track(&tin);
