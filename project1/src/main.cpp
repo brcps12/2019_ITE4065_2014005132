@@ -140,6 +140,7 @@ inline void radix_sort(record_t *buf, int len, int which) {
         });
         return;
     }
+    printf("%d\n", omp_get_thread_num());
     // use 1 byte
     record_t *last_[BYTE_SIZE + 1];
     record_t **last = last_ + 1;
@@ -178,10 +179,10 @@ inline void radix_sort(record_t *buf, int len, int which) {
     if (which < NB_KEY - 1) {
         for (int i = 0; i < BYTE_SIZE; ++i) {
             if (count[i] > 1) {
-                #pragma omp single nowait
-                {
+                // #pragma omp single nowait
+                // {
                     radix_sort(last[i - 1], last[i] - last[i - 1], which + 1);
-                }
+                // }
             }
         }
     }
