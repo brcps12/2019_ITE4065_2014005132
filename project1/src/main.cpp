@@ -19,7 +19,7 @@
 #define min(a, b) ((a) < (b) ? (a) : (b))
 
 #define RECORD_THRESHOLD 1000000
-#define SORT_THRESHOLD 500
+#define SORT_THRESHOLD 800
 #define BYTE_SIZE 256
 
 #define NUM_OF_THREADS (80)
