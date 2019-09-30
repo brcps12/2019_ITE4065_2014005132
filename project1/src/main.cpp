@@ -10,7 +10,6 @@
 #include <queue>
 #include <algorithm>
 #include <vector>
-#include <malloc.h>
 
 // #include <time_chk.hpp>
 #include <mytypes.hpp>
@@ -288,7 +287,7 @@ void partial_sort(buffered_io_fd *out, off_t offset, size_t num_records, size_t 
     // }
     // kway_merge(out, record_buf, num_records, k, RECORD_THRESHOLD);
 
-    #pragma omp parallel num_threads(40)
+    #pragma omp parallel num_threads(8)
     {
         #pragma omp single
         {
@@ -432,10 +431,10 @@ int main(int argc, char* argv[]) {
     total_records = file_size / NB_RECORD;
 
     record_buf_size = min(total_records * NB_RECORD, MAX_MEMSIZ_FOR_DATA);
-    record_buf = (record_t*)memalign(32, record_buf_size);
+    record_buf = (record_t*)malloc(32, record_buf_size);
 
     // outbuf_size = file_size > MAX_MEMSIZ_FOR_DATA ? OUTPUT_BUFSIZ : max(OUTPUT_BUFSIZ, MAX_MEMSIZ_FOR_DATA - file_size);
-    outbuf = (byte*)memalign(32, OUTPUT_BUFSIZ);
+    outbuf = (byte*)malloc(32, OUTPUT_BUFSIZ);
     fout = buffered_open(argv[2], O_RDWR | O_CREAT | O_TRUNC | O_ASYNC | O_NONBLOCK, outbuf, OUTPUT_BUFSIZ);
     // fout = fopen(argv[2], "wb+");
     if (fout == NULL) {
