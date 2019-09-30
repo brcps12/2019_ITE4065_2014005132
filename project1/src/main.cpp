@@ -431,10 +431,10 @@ int main(int argc, char* argv[]) {
     total_records = file_size / NB_RECORD;
 
     record_buf_size = min(total_records * NB_RECORD, MAX_MEMSIZ_FOR_DATA);
-    record_buf = (record_t*)malloc(32, record_buf_size);
+    record_buf = (record_t*)malloc(record_buf_size);
 
     // outbuf_size = file_size > MAX_MEMSIZ_FOR_DATA ? OUTPUT_BUFSIZ : max(OUTPUT_BUFSIZ, MAX_MEMSIZ_FOR_DATA - file_size);
-    outbuf = (byte*)malloc(32, OUTPUT_BUFSIZ);
+    outbuf = (byte*)malloc(OUTPUT_BUFSIZ);
     fout = buffered_open(argv[2], O_RDWR | O_CREAT | O_TRUNC | O_ASYNC | O_NONBLOCK, outbuf, OUTPUT_BUFSIZ);
     // fout = fopen(argv[2], "wb+");
     if (fout == NULL) {
