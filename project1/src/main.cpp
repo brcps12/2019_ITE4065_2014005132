@@ -141,6 +141,7 @@ inline void radix_sort(record_t *buf, int len, int which) {
         return;
     }
     // use 1 byte
+    // printf("%d\n", omp_get_thread_num());
     record_t *last_[BYTE_SIZE + 1];
     record_t **last = last_ + 1;
     int count[BYTE_SIZE] = { 0, };
@@ -176,12 +177,10 @@ inline void radix_sort(record_t *buf, int len, int which) {
     }
 
     if (which < NB_KEY - 1) {
+        #pragma omp parallel for
         for (int i = 0; i < BYTE_SIZE; ++i) {
             if (count[i] > 1) {
-                // #pragma omp single nowait
-                // {
-                    radix_sort(last[i - 1], last[i] - last[i - 1], which + 1);
-                // }
+                radix_sort(last[i - 1], last[i] - last[i - 1], which + 1);
             }
         }
     }
@@ -398,6 +397,7 @@ int main(int argc, char* argv[]) {
 #else
     // omp_set_num_threads(NUM_OF_THREADS);
 #endif
+    omp_set_nested(true);
 
     outbuf = (byte*)malloc(OUTPUT_BUFSIZ);
     input_fd = open(argv[1], O_RDONLY);
