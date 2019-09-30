@@ -8,7 +8,6 @@ void buffered_reset(buffered_io_fd *fd) {
     fd->offset = 0;
     fd->written = 0;
     fd->ptr = fd->buf;
-    lseek(fd-fd, 0, SEEK_SET);
 }
 
 buffered_io_fd * buffered_open(const char* path, int mode, byte* buf, size_t bufsiz) {
@@ -39,7 +38,7 @@ void buffered_close(buffered_io_fd *fd) {
 }
 
 ssize_t buffered_read(buffered_io_fd *fd, void *buf, size_t nbytes) {
-    ssize_t readbytes = read(fd->fd, buf, nbytes);
+    ssize_t readbytes = pread(fd->fd, buf, nbytes, fd->offset);
     if (readbytes >= 0) {
         fd->offset += readbytes;
     }
@@ -50,7 +49,7 @@ ssize_t buffered_read(buffered_io_fd *fd, void *buf, size_t nbytes) {
 ssize_t buffered_append(buffered_io_fd *fd, void *buf, size_t nbytes) {
     if (fd->ptr >= fd->buf + fd->bufsiz) {
         buffered_flush(fd);
-        write(fd->fd, fd->buf, fd->written);
+        pwrite(fd->fd, fd->buf, fd->written, fd->offset);
         fd->offset += fd->written;
         fd->written = 0;
         fd->ptr = fd->buf;
