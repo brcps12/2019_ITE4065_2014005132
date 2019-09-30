@@ -140,7 +140,6 @@ inline void radix_sort(record_t *buf, int len, int which) {
         });
         return;
     }
-    printf("%d\n", omp_get_thread_num());
     // use 1 byte
     record_t *last_[BYTE_SIZE + 1];
     record_t **last = last_ + 1;
