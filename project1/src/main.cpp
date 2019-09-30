@@ -11,7 +11,7 @@
 #include <algorithm>
 #include <vector>
 
-// #include <time_chk.hpp>
+#include <time_chk.hpp>
 #include <mytypes.hpp>
 #include <bufio.hpp>
 
@@ -287,13 +287,16 @@ void partial_sort(buffered_io_fd *out, off_t offset, size_t num_records, size_t 
     // }
     // kway_merge(out, record_buf, num_records, k, RECORD_THRESHOLD);
 
+    TimeTracker tracker;
+    tracker.start();
     #pragma omp parallel
     {
-        #pragma omp single
+        #pragma omp single nowait
         {
             radix_sort(record_buf, num_records, 0);
         }
     }
+    tracker.stopAndPrint("Sort");
     // stop_and_print_interval(&tin, "Merge");
     
     // begin_time_track(&tin);
