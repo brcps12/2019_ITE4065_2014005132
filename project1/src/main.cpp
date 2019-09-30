@@ -184,16 +184,11 @@ void radix_sort(record_t *buf, int len, int which) {
     }
 
     if (which < NB_KEY - 1) {
-        // #pragma omp parallel for shared(count, last, which)
         for (int i = 0; i < BYTE_SIZE; ++i) {
             if (count[i] > 1) {
-                #pragma omp task
-                {
-                    radix_sort(last[i - 1], last[i] - last[i - 1], which + 1);
-                }
+                radix_sort(last[i - 1], last[i] - last[i - 1], which + 1);
             }
         }
-        #pragma omp taskwait
     }
 }
 
