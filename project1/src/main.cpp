@@ -4,7 +4,7 @@
 #include <unistd.h>
 #include <sys/types.h>
 #include <fcntl.h>
-#include <assert.h>
+// #include <assert.h>
 #include <string.h>
 // #include <sys/time.h>
 #include <queue>
@@ -25,7 +25,7 @@
 #define SORT_THRESHOLD 500
 #define BYTE_SIZE 256
 
-#define NUM_OF_THREADS (80)
+#define NUM_OF_THREADS (40)
 // It can be set in dynamically: currently 80% of total(=2g)
 #define MAX_MEMSIZ_FOR_DATA ((size_t)(0.9 * 2 * GB))
 // #define MAX_MEMSIZ_FOR_DATA ((size_t)(300 * MB))
