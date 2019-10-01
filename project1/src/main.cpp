@@ -22,7 +22,7 @@
 #define min(a, b) ((a) < (b) ? (a) : (b))
 
 #define THRESHOLD_READ (1000000)
-#define NUM_OF_THREADS (40)
+#define NUM_OF_THREADS (80)
 
 // It can be set in dynamically: currently 90% of total(=2g)
 #define MAX_MEMSIZ_FOR_DATA ((size_t)(0.95 * 2 * GB))
