@@ -21,14 +21,4 @@ typedef struct {
     rec_payload_t payload;
 } record_t;
 
-typedef struct {
-    rec_key_t key;
-    off_t idx;
-} comp_record_t;
-
-typedef struct {
-    off_t start_idx;
-    record_t *buf;
-} record_buffer_t;
-
 #endif

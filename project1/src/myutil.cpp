@@ -20,4 +20,3 @@ void print_records(record_t *records, size_t num) {
 int myrandom(int begin, int end) {
     return (end - begin + 1) * ((double)rand() / RAND_MAX) + begin;
 }
-
