@@ -12,7 +12,7 @@ INC = ./include/
 LIB = ./lib/
 
 # Pre-Processor.
-CXXFLAGS += -I$(INC) -L$(LIB) -lpthread -fopenmp --std=c++11
+CXXFLAGS += -I$(INC) -L$(LIB) -lrt -lpthread -fopenmp --std=c++11
 
 
 TARGET = run

@@ -4,16 +4,19 @@
 #include <unistd.h>
 #include <sys/types.h>
 #include <fcntl.h>
-// #include <assert.h>
+#include <assert.h>
 #include <string.h>
 // #include <sys/time.h>
 #include <queue>
 #include <algorithm>
 #include <vector>
+#include <aio.h>
+#include <errno.h>
 
 // #include <time_chk.hpp>
 #include <mytypes.hpp>
 #include <bufio.hpp>
+#include <myutil.hpp>
 
 #define max(a, b) ((a) > (b) ? (a) : (b))
 #define min(a, b) ((a) < (b) ? (a) : (b))
@@ -40,9 +43,11 @@ typedef struct {
 
 typedef struct {
     buffered_io_fd *file;
-    record_t *buf, *ptr;
-    size_t bufsiz, num;
-    ssize_t remain;
+    record_t *buf[2], *ptr;
+    size_t bufsiz[2], num;
+    ssize_t remain[2];
+    int cur;
+    struct aiocb aio;
 } external_t;
 
 int input_fd;
@@ -269,6 +274,15 @@ void kway_merge(buffered_io_fd *out, record_t *rin, size_t buflen, off_t k, off_
     }
 }
 
+bool isSorted(record_t *start, record_t *end) {
+    for (record_t *ptr = start + 1; ptr != end; ptr++) {
+        if (memcmp(ptr - 1, ptr, NB_KEY) > 0) {
+            return false;
+        }
+    }
+    return true;
+}
+
 void partial_sort(buffered_io_fd *out, off_t offset, size_t num_records, size_t write_offset) {
     // time_interval_t tin;
     // begin_time_track(&tin);
@@ -314,39 +328,77 @@ void partial_sort(buffered_io_fd *out, off_t offset, size_t num_records, size_t 
     // stop_and_print_interval(&tin, "File write");
 }
 
-record_t *get_next_record(buffered_io_fd *in, record_t *buf, record_t **ptr, size_t bufsiz, ssize_t *remain) {
-    if (*remain == 0) {
-        *remain = buffered_read(in, buf, bufsiz * NB_RECORD) / NB_RECORD;
-        if (*remain <= 0) return NULL;
-        *ptr = buf;
+record_t *get_next_record(external_t &ext) {
+    if (ext.remain[ext.cur] == 0) {
+        // printf("%d before %d => ", ii, c);
+        // for (int i = 0; i < k; i++) {
+        //     printf("%d: %d ", i, exts[i].cur);
+        // }
+        // printf("\n");
+
+        while (aio_error(&ext.aio) == EINPROGRESS);
+
+        ssize_t readbytes = aio_return(&ext.aio);
+        // if (readbytes % NB_RECORD != 0) {
+        //     printf("%d\n", ext.aio.aio_offset);
+        //     printf("%ld %d %d %d wrong\n", readbytes, errno, ext.bufsiz[ext.cur], aio_error(&ext.aio));
+        // }
+        if (readbytes <= 0) return NULL;
+        ext.remain[ext.cur ^ 1] = readbytes / NB_RECORD;
+
+        ext.aio.aio_buf = ext.buf[ext.cur];
+        // ext.aio.aio_offset = ext
+        ext.aio.aio_nbytes = ext.bufsiz[ext.cur] * NB_RECORD;
+        ext.aio.aio_offset += readbytes;
+
+        aio_read(&ext.aio);
+        
+        ext.cur ^= 1;
+        ext.ptr = ext.buf[ext.cur];
+        
+        // assert(isSorted(ext.buf[ext.cur], ext.buf[ext.cur] + ext.bufsiz[ext.cur]));
+        // printf("%d: first key ", c);
+        // print_key(ext.buf[ext.cur]);
+
+        // printf("after %d => ", c);
+        // for (int i = 0; i < k; i++) {
+        //     printf("%d: %d ", i, exts[i].cur);
+        // }
+        // printf("\n");
     }
 
-    --*remain;
-    *ptr += 1;
-    return *ptr - 1;
+    --ext.remain[ext.cur];
+    ++ext.ptr;
+    return ext.ptr - 1;
 }
 void kway_external_merge(external_t exts[], size_t k, buffered_io_fd *out) {
     record_t *record;
     std::priority_queue<heap_item_t, std::vector<heap_item_t>, heap_comparison> q;
     for (int i = 0; i < k; i++) {
-        q.push({ get_next_record(exts[i].file, exts[i].buf, &exts[i].ptr, exts[i].bufsiz, &exts[i].remain), i });
+        q.push({ get_next_record(exts[i]), i });
     }
 
+    // int i = 0;
+    // int prevK = q.top().k;
+    record_t prev = *q.top().record;
     while (!q.empty()) {
         heap_item_t p = q.top();
         q.pop();
+        // ++i;
 
         if (q.empty()) {
             buffered_append(out, p.record, sizeof(record_t));
             buffered_flush(out);
             size_t kk = p.k;
-            size_t insize = get_filesize(exts[kk].file);
+            size_t insize = exts[kk].num * NB_RECORD;
             int fd = exts[kk].file->fd;
-            off_t inoff = exts[kk].file->offset, outoff = out->offset;
-            outoff += pwrite(out->fd, exts[kk].ptr, exts[kk].remain * NB_RECORD, outoff);
+            off_t inoff = exts[kk].aio.aio_offset, outoff = out->offset;
+            outoff += pwrite(out->fd, exts[kk].ptr, exts[kk].remain[exts[kk].cur] * NB_RECORD, outoff);
+            outoff += pwrite(out->fd, exts[kk].buf[exts[kk].cur ^ 1], exts[kk].remain[exts[kk].cur ^ 1] * NB_RECORD, outoff);
 
-            while (inoff < insize) {
-                ssize_t readbytes = pread(fd, record_buf, record_buf_size / NB_RECORD, inoff);
+            ssize_t readbytes;
+            while (readbytes > 0) {
+                readbytes = pread(fd, record_buf, record_buf_size / NB_RECORD, inoff);
                 if (readbytes <= 0) break;
                 inoff += readbytes;
                 outoff += pwrite(out->fd, record_buf, readbytes, outoff);
@@ -354,13 +406,23 @@ void kway_external_merge(external_t exts[], size_t k, buffered_io_fd *out) {
             
             break;
         }
+
+        // if (memcmp(&prev, p.record, NB_KEY) > 0) {
+        //     printf("prevK: %d, curK: %d\n", prevK, p.k);
+        //     printf("failed %d\n", i);
+        //     print_key(&prev);
+        //     print_key(p.record);
+        // }
         
         buffered_append(out, p.record, sizeof(record_t));
-        record = get_next_record(exts[p.k].file, exts[p.k].buf, &exts[p.k].ptr, exts[p.k].bufsiz, &exts[p.k].remain);
+        record = get_next_record(exts[p.k]);
 
         if (record != NULL) {
             q.push({ record, p.k });
         }
+
+        // prev = *p.record;
+        // prevK = p.k;
     }
 
     buffered_flush(out);
@@ -444,7 +506,7 @@ int main(int argc, char* argv[]) {
 
     // outbuf_size = file_size > MAX_MEMSIZ_FOR_DATA ? OUTPUT_BUFSIZ : max(OUTPUT_BUFSIZ, MAX_MEMSIZ_FOR_DATA - file_size);
     outbuf = (byte*)malloc(OUTPUT_BUFSIZ);
-    fout = buffered_open(argv[2], O_RDWR | O_CREAT | O_TRUNC | O_ASYNC | O_NONBLOCK, outbuf, OUTPUT_BUFSIZ);
+    fout = buffered_open(argv[2], O_RDWR | O_CREAT | O_TRUNC | O_ASYNC, outbuf, OUTPUT_BUFSIZ);
     // fout = fopen(argv[2], "wb+");
     if (fout == NULL) {
         printf("error: cannot create output file\n");
@@ -480,16 +542,35 @@ int main(int argc, char* argv[]) {
             partial_sort(tmpfiles[tidx], offset, ext.num, woff);
             written += ext.num;
 
-            ext.remain = woff;
+            ext.remain[0] = woff / 2;
+            ext.remain[1] = woff - ext.remain[0];
+            memset(&ext.aio, 0, sizeof(struct aiocb));
+            ext.aio.aio_fildes = ext.file->fd;
 
             buffered_reset(ext.file);
         }
 
-        exts[0].buf = exts[0].ptr = record_buf;
-        exts[0].bufsiz = exts[0].remain;
+        exts[0].buf[0] = exts[0].ptr = record_buf;
+        exts[0].bufsiz[0] = exts[0].remain[0];
+        exts[0].buf[1] = exts[0].buf[0] + exts[0].bufsiz[0];
+        exts[0].bufsiz[1] = exts[0].remain[1];
+        exts[0].cur = 0;
+        exts[0].aio.aio_offset = -exts[0].remain[1] * NB_RECORD;
+        exts[0].aio.__return_value = exts[0].remain[1] * NB_RECORD;
+        assert(isSorted(exts[0].buf[0], exts[0].buf[1] + exts[0].bufsiz[1]));
         for (int i = 1; i < num_partition; i++) {
-            exts[i].buf = exts[i - 1].buf + exts[i - 1].bufsiz;
-            exts[i].bufsiz = min(exts[i].num, max_bufsiz);
+            size_t size = min(exts[i].num, max_bufsiz);
+            exts[i].buf[0] = exts[i - 1].buf[1] + exts[i - 1].bufsiz[1];
+            exts[i].bufsiz[0] = size / 2;
+            exts[i].buf[1] = exts[i].buf[0] + exts[i].bufsiz[0];
+            exts[i].bufsiz[1] = size - exts[i].bufsiz[0];
+            exts[i].cur = 1;
+            exts[i].remain[0] = exts[i].remain[1] = 0;
+            
+            exts[i].aio.aio_offset = 0;
+            exts[i].aio.aio_buf = exts[i].buf[0];
+            exts[i].aio.aio_nbytes = exts[i].bufsiz[0] * NB_RECORD;
+            aio_read(&exts[i].aio);
         }
 
         kway_external_merge(exts, num_partition, fout);
