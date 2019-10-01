@@ -557,7 +557,6 @@ int main(int argc, char* argv[]) {
         exts[0].cur = 0;
         exts[0].aio.aio_offset = -exts[0].remain[1] * NB_RECORD;
         exts[0].aio.__return_value = exts[0].remain[1] * NB_RECORD;
-        assert(isSorted(exts[0].buf[0], exts[0].buf[1] + exts[0].bufsiz[1]));
         for (int i = 1; i < num_partition; i++) {
             size_t size = min(exts[i].num, max_bufsiz);
             exts[i].buf[0] = exts[i - 1].buf[1] + exts[i - 1].bufsiz[1];
