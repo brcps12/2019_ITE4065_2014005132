@@ -25,11 +25,12 @@
 #define NUM_OF_THREADS (80)
 
 // It can be set in dynamically: currently 90% of total(=2g)
-#define MAX_MEMSIZ_FOR_DATA ((size_t)(0.95 * 2 * GB))
+#define MAX_MEMSIZ_FOR_DATA ((size_t)(0.9 * 2 * GB))
 
 // maxinum number of records can be used
 #define MAX_RECORD_NUM ((size_t)(MEMSIZ_FOR_DATA / NB_RECORD))
 
+#define INPUT_BUFSIZ (128 * MB)
 #define OUTPUT_BUFSIZ (64 * MB)
 
 #define TMPFILE_NAME "tmp.%d"
@@ -176,23 +177,31 @@ int main(int argc, char* argv[]) {
         size_t max_bufsiz = record_buf_size / (NB_RECORD * num_partition);
         size_t rmsize = record_buf_size / NB_RECORD;
         int tidx = num_partition - 1;
-        size_t written = 0;
+        size_t lbufsiz = 0;
         for (off_t offset = (num_partition - 1) * num_record_for_partition; offset >= 0; offset -= num_record_for_partition, --tidx) {
             external_info_t &ext = exts[tidx];
             ext.file = tmpfiles[tidx];
             ext.num = min(offset + num_record_for_partition, total_records) - offset;
-            rmsize -= tidx == 0 ? 0 : min(ext.num, max_bufsiz);
-            off_t woff = tidx == 0 ? rmsize : 0;
+            if (tidx == 0) {
+                ext.bufsiz = rmsize;
+            } else {
+                ext.bufsiz = min(INPUT_BUFSIZ / NB_RECORD, ext.num);
+                lbufsiz += ext.bufsiz;
+                rmsize -= ext.bufsiz;
+            }
+
+            off_t woff = tidx == 0 ? ext.bufsiz : 0;
             phase1_sorting(tmpfiles[tidx], offset, ext.num, woff);
-            written += ext.num;
             ext.remain = woff;
             buffered_reset(ext.file);
         }
         exts[0].buf = exts[0].ptr = record_buf;
-        exts[0].bufsiz = exts[0].remain;
+        printf("%ld\n", exts[0].bufsiz);
+        // exts[0].bufsiz = exts[0].remain;
         for (int i = 1; i < num_partition; i++) {
             exts[i].buf = exts[i - 1].buf + exts[i - 1].bufsiz;
-            exts[i].bufsiz = min(exts[i].num, max_bufsiz);
+            printf("%ld\n", exts[i].bufsiz);
+            // exts[i].bufsiz = min(exts[i].num, max_bufsiz);
         }
 
         kway_external_merge(exts, num_partition);
