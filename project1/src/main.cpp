@@ -22,15 +22,14 @@
 #define min(a, b) ((a) < (b) ? (a) : (b))
 
 #define THRESHOLD_READ (1000000)
-#define NUM_OF_THREADS (80)
+#define NUM_OF_THREADS (40)
 
 // It can be set in dynamically: currently 90% of total(=2g)
-#define MAX_MEMSIZ_FOR_DATA ((size_t)(0.95 * 2 * GB))
+#define MAX_MEMSIZ_FOR_DATA ((size_t)(0.9 * 2 * GB))
 
 // maxinum number of records can be used
 #define MAX_RECORD_NUM ((size_t)(MEMSIZ_FOR_DATA / NB_RECORD))
 
-#define INPUT_BUFSIZ (64 * MB)
 #define OUTPUT_BUFSIZ (64 * MB)
 
 #define TMPFILE_NAME "tmp.%d"
@@ -189,9 +188,11 @@ int main(int argc, char* argv[]) {
         }
         exts[0].buf = exts[0].ptr = record_buf;
         exts[0].bufsiz = exts[0].remain;
+        printf("%ld\n", exts[0].bufsiz);
         for (int i = 1; i < num_partition; i++) {
             exts[i].buf = exts[i - 1].buf + exts[i - 1].bufsiz;
             exts[i].bufsiz = min(exts[i].num, max_bufsiz);
+            printf("%ld\n", exts[i].bufsiz);
         }
 
         kway_external_merge(exts, num_partition);
