@@ -3,6 +3,7 @@ exec/**/*
 
 # ignore link files
 /**/*.o
+/project*/run
 
 # ignore IDE configurations
 .idea
