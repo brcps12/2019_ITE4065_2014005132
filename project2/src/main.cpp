@@ -68,6 +68,9 @@ int main(int argc, char *argv[]) {
     // clean resources
     GlobalState::destroy();
 
+    for (int i = 0; i < N; i++) {
+        delete threads[i];
+    }
     delete[] threads;
     delete db;
 
