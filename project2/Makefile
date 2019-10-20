@@ -3,7 +3,7 @@ CC = g++
 CXXFLAGS = -Wall -Wno-sign-compare -DLOCAL_TEST
 
 # Verbose mode
-CXXFLAGS += -DVERBOSE
+# CXXFLAGS += -DVERBOSE
 
 CXXFLAGS += -O2
 #CXXFLAGS += -g
