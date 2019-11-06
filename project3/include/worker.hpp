@@ -10,7 +10,7 @@ class Snapshot;
 class WorkerThread {
 private:
     int tid;
-    int workState;
+    volatile int threadStatus;
     u_int64_t numExecutions;
     Snapshot<int32_t> * snapshot;
     std::thread th;
@@ -26,9 +26,7 @@ public:
     WorkerThread(int tid, Snapshot<int32_t> * snapshot);
 
     void work();
-    void stop();
-    void join();
-    u_int64_t getNumExecutions();
+    u_int64_t terminate();
 
     static int getThreadId();
 };

@@ -4,27 +4,25 @@
 #include <worker.hpp>
 #include <snapshot.hpp>
 
-#include <stdio.h>
-
 thread_local int WorkerThread::myTid = 0;
 
 WorkerThread::WorkerThread(int tid, Snapshot<int32_t> * snapshot) {
     this->tid = tid;
     this->snapshot = snapshot;
     this->numExecutions = 0;
-    this->workState = 0;
+    this->threadStatus = 0;
     this->th = std::thread(&WorkerThread::entryPoint, this, tid);
 
-    while (this->workState == 0) {
+    while (this->threadStatus == 0) {
         std::this_thread::yield();
     }
 }
 
 void WorkerThread::entryPoint(int tid) {
     WorkerThread::myTid = tid;
-    this->workState = 1;
+    this->threadStatus = 1;
 
-    while (this->workState == 1) {
+    while (this->threadStatus == 1) {
         std::this_thread::yield();
     }
 
@@ -32,7 +30,7 @@ void WorkerThread::entryPoint(int tid) {
 }
 
 void WorkerThread::doWork() {
-    while (this->workState == 2) {
+    while (this->threadStatus == 2) {
         this->snapshot->update(rand());
         ++this->numExecutions;
     }
@@ -46,18 +44,12 @@ int32_t WorkerThread::rand() {
 }
 
 void WorkerThread::work() {
-    this->workState = 2;
+    this->threadStatus = 2;
 }
 
-void WorkerThread::stop() {
-    this->workState = 3;
-}
-
-void WorkerThread::join() {
+u_int64_t WorkerThread::terminate() {
+    this->threadStatus = 3;
     this->th.join();
-}
-
-u_int64_t WorkerThread::getNumExecutions() {
     return this->numExecutions;
 }
 

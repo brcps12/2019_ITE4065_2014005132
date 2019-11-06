@@ -36,12 +36,7 @@ int main(int argc, char *argv[]) {
 
     u_int64_t numExecutions = 0;
     for (int i = 0; i < N; i++) {
-        numExecutions += threads[i]->getNumExecutions();
-        threads[i]->stop();
-    }
-
-    for (int i = 0; i < N; i++) {
-        threads[i]->join();
+        numExecutions += threads[i]->terminate();
     }
 
     cout << "Total number of updates: " << numExecutions << endl;
