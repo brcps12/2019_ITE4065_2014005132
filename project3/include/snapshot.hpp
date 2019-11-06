@@ -40,6 +40,8 @@ public:
         this->label = other.label;
         this->value = other.value;
         this->snap = other.snap;
+
+        return *this;
     }
 };
 
