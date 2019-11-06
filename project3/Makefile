@@ -1,6 +1,6 @@
 # Compiler and Compile options.
 CC = g++
-CXXFLAGS = -Wall -Wno-sign-compare
+CXXFLAGS = -Wall
 
 # Verbose mode
 # CXXFLAGS += -DVERBOSE
