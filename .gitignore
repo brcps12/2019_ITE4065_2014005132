@@ -8,3 +8,4 @@ exec/**/*
 # ignore IDE configurations
 .idea
 .vscode
+.DS_Store
