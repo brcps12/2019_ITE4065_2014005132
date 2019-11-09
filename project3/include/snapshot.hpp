@@ -1,108 +1,74 @@
 #ifndef _SNAPSHOT_HPP
 #define _SNAPSHOT_HPP
 
-#include <types.hpp>
-#include <worker.hpp>
+#include <stdio.h>
+#include <memory>
+#include <atomic>
 
-template<typename T>
-class LabeledValue {
-private:
-    u_int32_t label;
-    T value;
-    Array<T> snap;
-public:
-    LabeledValue() {
+// Assume that creation and assignment are atomic
+struct StampedValue {
+    int stamp;
+    int value;
+    int* snap;
+    int capacity;
+
+    StampedValue(): stamp(0), value(0), snap(NULL), capacity(0) {}
+
+    StampedValue(int value): stamp(0), value(value), snap(NULL), capacity(0) {}
+
+    StampedValue(int stamp, int value, int* snap, int capacity): stamp(stamp), value(value), capacity(capacity) {
+        if (snap != NULL && capacity > 0) {
+            this->snap = new int[capacity];
+
+            for (int i = 0; i < capacity; ++i) {
+                this->snap[i] = snap[i];
+            }
+        }
     }
 
-    LabeledValue(T initValue): label(0), value(initValue) {
+    ~StampedValue() {
+        if (snap != NULL) {
+            delete[] this->snap;
+        }
     }
 
-    LabeledValue(u_int32_t label, T value, Array<T> snap): label(label), value(value), snap(snap) {
-    }
+    StampedValue& operator=(const StampedValue& other) {
+        if (this == &other) {
+            return *this;
+        }
 
-    u_int32_t getLabel() {
-        return label;
-    }
+        if (this->snap == NULL && other.capacity > 0) {
+            this->snap = new int[other.capacity];
+        }
 
-    T getValue() {
-        return value;
-    }
-
-    const Array<T> getSnap() {
-        return snap;
-    }
-
-    LabeledValue& operator=(const LabeledValue& other) {
-         if (this == &other) {
-             return *this;
-         }
-
-        this->label = other.label;
+        this->stamp = other.stamp;
         this->value = other.value;
-        this->snap = other.snap;
+        this->capacity = other.capacity;
+
+        for (int i = 0; i < other.capacity; ++i) {
+            this->snap[i] = other.snap[i];
+        }
 
         return *this;
     }
 };
 
-template<typename T>
+typedef std::shared_ptr<StampedValue> ValuePtr;
+
 class Snapshot {
 private:
     int capacity;
-    Array<LabeledValue<T>> registers;
-    Array<LabeledValue<T>> collect() {
-        Array<LabeledValue<T>> copy(capacity);
-        
-        for (int i = 0; i < capacity; ++i) {
-            copy[i] = registers[i];
-        }
+    ValuePtr * registers;
 
-        return copy;
-    }
+    ValuePtr * collect();
 public:
-    Snapshot(int capacity, T initValue) {
-        this->capacity = capacity;
-        this->registers = Array<LabeledValue<T>>(capacity);
+    Snapshot(int capacity);
 
-        for (int i = 0; i < capacity; ++i) {
-            registers[i] = LabeledValue<T>(initValue);
-        }
-    }
+    ~Snapshot();
 
-    void update(T value) {
-        int me = WorkerThread::getThreadId();
-        Array<T> snap = scan();
-        LabeledValue<T> oldValue = registers[me - 1];
-        LabeledValue<T> newValue = LabeledValue<T>(oldValue.getLabel() + 1, value, snap);
-        registers[me - 1] = newValue;
-    }
+    void update(int value);
 
-    Array<T> scan() {
-        Array<LabeledValue<T>> oldCopy, newCopy;
-        Array<bool> moved(capacity, false);
-        oldCopy = collect();
-
-    COLLECT:
-        newCopy = collect();
-        for (int i = 0; i < capacity; ++i) {
-            if (oldCopy[i].getLabel() != newCopy[i].getLabel()) {
-                if (moved[i]) {
-                    return oldCopy[i].getSnap();
-                } else {
-                    moved[i] = true;
-                    oldCopy = newCopy;
-                    goto COLLECT;
-                }
-            }
-        }
-
-        Array<T> result(capacity);
-        for (int i = 0; i < capacity; ++i) {
-            result[i] = newCopy[i].getValue();
-        }
-
-        return result;
-    }
+    int* scan();
 };
 
 #endif

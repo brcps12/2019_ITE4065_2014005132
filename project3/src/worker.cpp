@@ -1,17 +1,16 @@
 #include <thread>
 #include <random>
-#include <limits>
+#include <climits>
 #include <worker.hpp>
 #include <snapshot.hpp>
 
-thread_local int WorkerThread::myTid = 0;
+thread_local int WorkerThread::tid = 0;
 
-WorkerThread::WorkerThread(int tid, Snapshot<int32_t> * snapshot) {
-    this->tid = tid;
+WorkerThread::WorkerThread(int tid, Snapshot* snapshot) {
     this->snapshot = snapshot;
     this->numExecutions = 0;
     this->threadStatus = 0;
-    this->th = std::thread(&WorkerThread::entryPoint, this, tid);
+    this->thread = std::thread(&WorkerThread::entryPoint, this, tid);
 
     while (this->threadStatus == 0) {
         std::this_thread::yield();
@@ -19,7 +18,7 @@ WorkerThread::WorkerThread(int tid, Snapshot<int32_t> * snapshot) {
 }
 
 void WorkerThread::entryPoint(int tid) {
-    WorkerThread::myTid = tid;
+    WorkerThread::tid = tid;
     this->threadStatus = 1;
 
     while (this->threadStatus == 1) {
@@ -36,9 +35,9 @@ void WorkerThread::doWork() {
     }
 }
 
-int32_t WorkerThread::rand() {
+int WorkerThread::rand() {
     thread_local std::mt19937 engine(std::random_device{}());
-    std::uniform_int_distribution<int32_t> dist(INT32_MIN, INT32_MAX);
+    std::uniform_int_distribution<int> dist(INT_MIN, INT_MAX);
 
     return dist(engine);
 }
@@ -49,10 +48,10 @@ void WorkerThread::work() {
 
 u_int64_t WorkerThread::terminate() {
     this->threadStatus = 3;
-    this->th.join();
+    this->thread.join();
     return this->numExecutions;
 }
 
-int WorkerThread::getThreadId() {
-    return WorkerThread::myTid;
+int WorkerThread::currentThreadId() {
+    return WorkerThread::tid;
 }

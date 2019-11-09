@@ -2,33 +2,33 @@
 #define _WORKER_HPP
 
 #include <thread>
-#include <types.hpp>
-
-template<typename T>
-class Snapshot;
+#include <sys/types.h>
+#include <snapshot.hpp>
 
 class WorkerThread {
 private:
-    int tid;
+    std::thread thread;
+    Snapshot * snapshot;
     volatile int threadStatus;
     u_int64_t numExecutions;
-    Snapshot<int32_t> * snapshot;
-    std::thread th;
 
     void entryPoint(int tid);
-    void doWork();
-    int32_t rand();
 
-    static thread_local int myTid;
+    void doWork();
+
+    int rand();
+
+    static thread_local int tid;
 public:
     WorkerThread() {}
 
-    WorkerThread(int tid, Snapshot<int32_t> * snapshot);
+    WorkerThread(int tid, Snapshot * snapshot);
 
     void work();
+
     u_int64_t terminate();
 
-    static int getThreadId();
+    static int currentThreadId();
 };
 
 #endif
