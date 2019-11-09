@@ -1,7 +1,6 @@
 #include <iostream>
 #include <thread>
 #include <chrono>
-#include <types.hpp>
 #include <snapshot.hpp>
 #include <worker.hpp>
 
