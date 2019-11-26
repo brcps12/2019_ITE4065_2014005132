@@ -53,6 +53,10 @@ RETRY:
     curr = head->next;
         
     while(1) {
+        // REFERENCE 매크로를 사용하는 위치를 파악해서
+        // 어느 곳이 unmarked가 보장되는지를 알아보자.
+        // 중간에 prev가 지워지는 경우, curr가 지워지는 경우, succ가 지워지는 경우 모두
+        // 생각해 보면서 그려보자.
         succ = curr->next;
         while (ISMARKED(succ)) {
             if (CAS(&prev->next, curr, UNMARKED(succ))) {
@@ -111,6 +115,8 @@ bool list_remove(int key) {
         }
     }
 
+    // 이 CAS가 실패해도 상관이 없다. 왜그럴까? (생각해보기)
+    // ...
     CAS(&prev->next, UNMARKED(curr), succ);
     return true;
 }
