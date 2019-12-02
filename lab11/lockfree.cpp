@@ -59,7 +59,7 @@ RETRY:
         // 생각해 보면서 그려보자.
         succ = curr->next;
         while (ISMARKED(succ)) {
-            if (CAS(&prev->next, curr, UNMARKED(succ))) {
+            if (!CAS(&prev->next, curr, UNMARKED(succ))) {
                 goto RETRY;
             }
             curr = REFERENCE(succ);
