@@ -9,3 +9,7 @@ exec/**/*
 .idea
 .vscode
 .DS_Store
+
+# perf data
+perf.data
+perf.data.old
