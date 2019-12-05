@@ -1,5 +1,5 @@
 diff --git storage/innobase/buf/buf0buf.cc storage/innobase/buf/buf0buf.cc
-index 6a2bc34c767..22248bed91f 100644
+index 6a2bc34c767..650d6b60f71 100644
 --- storage/innobase/buf/buf0buf.cc
 +++ storage/innobase/buf/buf0buf.cc
 @@ -310,6 +310,10 @@ static const ulint	BUF_READ_AHEAD_PAGES = 64;
@@ -241,7 +241,7 @@ index 6a2bc34c767..22248bed91f 100644
  /********************************************************************//**
  Initialize a buffer pool instance.
  @return DB_SUCCESS if all goes well. */
-@@ -1857,26 +2008,68 @@ buf_pool_init_instance(
+@@ -1857,26 +2008,65 @@ buf_pool_init_instance(
  		buf_pool->curr_size = 0;
  		chunk = buf_pool->chunks;
  
@@ -316,13 +316,10 @@ index 6a2bc34c767..22248bed91f 100644
 +			bpi_task_merge(buf_pool, info);
 +			buf_pool->curr_size += info->chunk_size;
 +		}
-+
-+		ut_d(ut_list_validate(buf_pool->free));
-+		ut_d(ut_list_validate(rw_lock_list));
  
  		buf_pool->instance_no = instance_no;
  		buf_pool->read_ahead_area =
-@@ -2051,18 +2244,25 @@ buf_pool_init(
+@@ -2051,18 +2241,25 @@ buf_pool_init(
  
  	buf_chunk_map_reg = UT_NEW_NOKEY(buf_pool_chunk_map_t());
  
