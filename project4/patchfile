@@ -1,0 +1,660 @@
+diff --git storage/innobase/buf/buf0buf.cc storage/innobase/buf/buf0buf.cc
+index 6a2bc34c767..22248bed91f 100644
+--- storage/innobase/buf/buf0buf.cc
++++ storage/innobase/buf/buf0buf.cc
+@@ -310,6 +310,10 @@ static const ulint	BUF_READ_AHEAD_PAGES = 64;
+ read-ahead buffer.  (Divide buf_pool size by this amount) */
+ static const ulint	BUF_READ_AHEAD_PORTION = 32;
+ 
++/** Added for Project 4 */
++volatile static bool bpi_finished;
++static bpi_task_t* bpi_task;
++
+ /** The buffer pools of the database */
+ buf_pool_t*	buf_pool_ptr;
+ 
+@@ -1479,7 +1483,8 @@ buf_block_init(
+ /*===========*/
+ 	buf_pool_t*	buf_pool,	/*!< in: buffer pool instance */
+ 	buf_block_t*	block,		/*!< in: pointer to control block */
+-	byte*		frame)		/*!< in: pointer to buffer frame */
++	byte*		frame,		/*!< in: pointer to buffer frame */
++	bpi_thread_info_t* thread_info = NULL)
+ {
+ 	UNIV_MEM_DESC(frame, srv_page_size);
+ 
+@@ -1529,17 +1534,37 @@ buf_block_init(
+ 	since buffer block rwlock will be registered later in
+ 	pfs_register_buffer_block(). */
+ 
+-	rw_lock_create(PFS_NOT_INSTRUMENTED, &block->lock, SYNC_LEVEL_VARYING);
++	if (thread_info == NULL) {
++		rw_lock_create(PFS_NOT_INSTRUMENTED, &block->lock, SYNC_LEVEL_VARYING);
+ 
+-	ut_d(rw_lock_create(PFS_NOT_INSTRUMENTED, block->debug_latch,
+-			    SYNC_LEVEL_VARYING));
++		ut_d(rw_lock_create(PFS_NOT_INSTRUMENTED, block->debug_latch,
++					SYNC_LEVEL_VARYING));
++	} else {
++		rw_lock_create_local(PFS_NOT_INSTRUMENTED,
++			&block->lock, SYNC_LEVEL_VARYING,
++			&thread_info->rw_lock_list);
++
++		ut_d(rw_lock_create_local(PFS_NOT_INSTRUMENTED,
++			block->debug_latch, SYNC_LEVEL_VARYING,
++			&thread_info->rw_lock_list));
++	}
+ 
+ #else /* PFS_SKIP_BUFFER_MUTEX_RWLOCK || PFS_GROUP_BUFFER_SYNC */
+ 
+-	rw_lock_create(buf_block_lock_key, &block->lock, SYNC_LEVEL_VARYING);
++	if (thread_info == NULL) {
++		rw_lock_create(buf_block_lock_key, &block->lock, SYNC_LEVEL_VARYING);
++
++		ut_d(rw_lock_create(buf_block_debug_latch_key,
++					block->debug_latch, SYNC_LEVEL_VARYING));
++	} else {
++		rw_lock_create_local(buf_block_lock_key,
++			&block->lock, SYNC_LEVEL_VARYING,
++			&thread_info->rw_lock_list);
+ 
+-	ut_d(rw_lock_create(buf_block_debug_latch_key,
+-			    block->debug_latch, SYNC_LEVEL_VARYING));
++		ut_d(rw_lock_create_local(buf_block_debug_latch_key,
++			block->debug_latch, SYNC_LEVEL_VARYING,
++			&thread_info->rw_lock_list));
++	}
+ 
+ #endif /* PFS_SKIP_BUFFER_MUTEX_RWLOCK || PFS_GROUP_BUFFER_SYNC */
+ 
+@@ -1557,7 +1582,8 @@ buf_chunk_init(
+ /*===========*/
+ 	buf_pool_t*	buf_pool,	/*!< in: buffer pool instance */
+ 	buf_chunk_t*	chunk,		/*!< out: chunk of buffers */
+-	ulint		mem_size)	/*!< in: requested size in bytes */
++	ulint		mem_size,	/*!< in: requested size in bytes */
++	bpi_thread_info_t*	thread_info = NULL)	/*!< in: thread info */
+ {
+ 	buf_block_t*	block;
+ 	byte*		frame;
+@@ -1626,11 +1652,15 @@ buf_chunk_init(
+ 
+ 	for (i = chunk->size; i--; ) {
+ 
+-		buf_block_init(buf_pool, block, frame);
++		buf_block_init(buf_pool, block, frame, thread_info);
+ 		UNIV_MEM_INVALID(block->frame, srv_page_size);
+ 
+ 		/* Add the block to the free list */
+-		UT_LIST_ADD_LAST(buf_pool->free, &block->page);
++		if (thread_info == NULL) {
++			UT_LIST_ADD_LAST(buf_pool->free, &block->page);
++		} else {
++			UT_LIST_ADD_LAST(thread_info->free, &block->page);
++		}
+ 
+ 		ut_d(block->page.in_free_list = TRUE);
+ 		ut_ad(buf_pool_from_block(block) == buf_pool);
+@@ -1647,6 +1677,17 @@ buf_chunk_init(
+ 	return(chunk);
+ }
+ 
++/** Added for Project 4 */
++static
++void
++bpi_task_merge(
++	buf_pool_t* buf_pool,
++	bpi_thread_info_t* thread_info)
++{
++	UT_LIST_MERGE(thread_info->free, buf_pool->free);
++	rw_lock_list_merge(&thread_info->rw_lock_list);
++}
++
+ #ifdef UNIV_DEBUG
+ /*********************************************************************//**
+ Finds a block in the given buffer chunk that points to a
+@@ -1792,14 +1833,124 @@ buf_pool_set_sizes(void)
+ 
+ /** Free the synchronization objects of a buffer pool block descriptor
+ @param[in,out]	block	buffer pool block descriptor */
+-static void buf_block_free_mutexes(buf_block_t* block)
++static void buf_block_free_mutexes(
++	buf_block_t* block,
++	bpi_thread_info_t* thread_info = NULL)
+ {
+ 	mutex_free(&block->mutex);
+-	rw_lock_free(&block->lock);
+-	ut_d(rw_lock_free(block->debug_latch));
++	if (thread_info == NULL) {
++		rw_lock_free(&block->lock);
++		ut_d(rw_lock_free(block->debug_latch));
++	} else {
++		rw_lock_free_local(&block->lock, &thread_info->rw_lock_list);
++		ut_d(rw_lock_free_local(block->debug_latch, &thread_info->rw_lock_list));
++	}
+ 	ut_d(ut_free(block->debug_latch));
+ }
+ 
++/********************************************************************//**
++Added for Project 4
++Buffer Pool Initialization using multithread */
++static
++os_thread_ret_t
++DECLARE_THREAD(buf_chunk_init_thread)(void* arg)
++{
++	bpi_thread_info_t* thread_info = (bpi_thread_info_t*) arg;
++	buf_chunk_t* chunk;
++	ulint i;
++
++	os_event_wait(bpi_task->curr_task);
++
++	while (!bpi_finished) {
++		thread_info->chunk_size = 0;
++		chunk = thread_info->chunk_ptr;
++		UT_LIST_INIT(thread_info->free, &buf_page_t::list);
++		UT_LIST_INIT(thread_info->rw_lock_list, &rw_lock_t::list);
++
++		for (i = 0; i < thread_info->n_chunks; i++, chunk++) {
++			if (!buf_chunk_init(bpi_task->buf_pool, chunk, bpi_task->chunk_size, thread_info)) {
++				bpi_task->error = DB_ERROR;
++				thread_info->error = DB_ERROR;
++				thread_info->init_n_chunks = i;
++
++				goto end;
++			}
++
++			thread_info->chunk_size += chunk->size;
++		}
++end:
++		thread_info->init_n_chunks = i;
++		if (my_atomic_add32(&bpi_task->n_executions, 1) == bpi_task->n_threads - 1) {
++			os_event_set(bpi_task->end_task);
++		}
++
++		// wait for next task
++		os_event_wait(bpi_task->next_task);
++	}
++
++	if (my_atomic_add32(&bpi_task->n_executions, 1) == bpi_task->n_threads - 1) {
++			os_event_set(bpi_task->end_task);
++	}
++
++	os_thread_exit();
++
++	OS_THREAD_DUMMY_RETURN;
++}
++
++static
++void
++buf_pool_thread_init()
++{
++	ulint i;
++	bpi_task = (bpi_task_t*) ut_zalloc_nokey(sizeof(*bpi_task));
++
++	// create events to send signal
++	bpi_task->curr_task = os_event_create(0);
++	bpi_task->next_task = os_event_create(0);
++	bpi_task->end_task = os_event_create(0);
++
++	bpi_finished = false;
++	bpi_task->error = DB_SUCCESS;
++	bpi_task->n_threads = sysconf(_SC_NPROCESSORS_ONLN);
++	bpi_task->thread_info = (bpi_thread_info_t*) ut_zalloc_nokey(bpi_task->n_threads * sizeof(*bpi_task->thread_info));
++	// os_thread_create() has limit for thread creation
++	// so temporary increase limit for init and decrease the value
++	srv_max_n_threads += bpi_task->n_threads;
++
++	// create thread pool for initializing chunks
++	for (i = 0; i < bpi_task->n_threads; i++) {
++		bpi_task->thread_info[i].error = DB_SUCCESS;
++		os_thread_create(buf_chunk_init_thread, &bpi_task->thread_info[i], NULL);
++	}
++}
++
++static
++void
++buf_pool_thread_reset()
++{
++	bpi_task->n_executions = 0;
++	swap_variables(os_event_t, bpi_task->curr_task, bpi_task->next_task);
++	os_event_reset(bpi_task->next_task);
++	os_event_reset(bpi_task->end_task);
++}
++
++static
++void
++buf_pool_thread_end()
++{
++	srv_max_n_threads -= bpi_task->n_threads;
++	bpi_finished = true;
++	os_event_set(bpi_task->curr_task);
++	os_event_wait(bpi_task->end_task);
++
++	os_event_destroy(bpi_task->curr_task);
++	os_event_destroy(bpi_task->next_task);
++	os_event_destroy(bpi_task->end_task);
++
++	ut_free(bpi_task->thread_info);
++	ut_free(bpi_task);
++}
++
+ /********************************************************************//**
+ Initialize a buffer pool instance.
+ @return DB_SUCCESS if all goes well. */
+@@ -1857,26 +2008,68 @@ buf_pool_init_instance(
+ 		buf_pool->curr_size = 0;
+ 		chunk = buf_pool->chunks;
+ 
+-		do {
+-			if (!buf_chunk_init(buf_pool, chunk, chunk_size)) {
+-				while (--chunk >= buf_pool->chunks) {
++		/* prepare to chunk init with multithread */
++		bpi_task->buf_pool = buf_pool;
++		bpi_task->instance_no = instance_no;
++		bpi_task->chunk_size = chunk_size;
++
++		ulint n_thread_chunks = buf_pool->n_chunks / bpi_task->n_threads;
++		if (buf_pool->n_chunks % bpi_task->n_threads != 0) {
++			n_thread_chunks += 1;
++		}
++
++		for (i = 0; i < bpi_task->n_threads; i++) {
++			bpi_thread_info_t* info = bpi_task->thread_info + i;
++			buf_chunk_t* last_chunk_ptr = buf_pool->chunks + buf_pool->n_chunks;
++			info->chunk_ptr = buf_pool->chunks + (i * n_thread_chunks);
++			if (info->chunk_ptr >= last_chunk_ptr) {
++				info->chunk_ptr = last_chunk_ptr;
++			}
++			info->n_chunks = last_chunk_ptr - info->chunk_ptr;
++			if (info->n_chunks > n_thread_chunks) {
++				info->n_chunks = n_thread_chunks;
++			}
++		}
++
++		os_event_set(bpi_task->curr_task);
++		os_event_wait(bpi_task->end_task);
++
++		if (bpi_task->error != DB_SUCCESS) {
++			/* a task has error */
++			for (i = 0; i < bpi_task->n_threads; i++) {
++				/* free blocks and chunk */
++				bpi_thread_info_t* info = bpi_task->thread_info + i;
++				chunk = info->chunk_ptr + info->init_n_chunks;
++				while (--chunk >= info->chunk_ptr) {
+ 					buf_block_t*	block = chunk->blocks;
+ 
+-					for (i = chunk->size; i--; block++) {
+-						buf_block_free_mutexes(block);
++					for (ulint j = chunk->size; j--; block++) {
++						buf_block_free_mutexes(block, &bpi_task->thread_info[i]);
+ 					}
+-
+ 					buf_pool->allocator.deallocate_large_dodump(
+ 						chunk->mem, &chunk->mem_pfx, chunk->mem_size());
+ 				}
+-				ut_free(buf_pool->chunks);
+-				buf_pool_mutex_exit(buf_pool);
+-
+-				return(DB_ERROR);
+ 			}
+ 
+-			buf_pool->curr_size += chunk->size;
+-		} while (++chunk < buf_pool->chunks + buf_pool->n_chunks);
++			ut_free(buf_pool->chunks);
++			buf_pool_mutex_exit(buf_pool);
++
++			mutex_free(&buf_pool->mutex);
++			mutex_free(&buf_pool->zip_mutex);
++			buf_pool->allocator.~ut_allocator();
++
++			return(DB_ERROR);
++		}
++
++		for (i = 0; i < bpi_task->n_threads; i++) {
++			bpi_thread_info_t* info = bpi_task->thread_info + i;
++			ut_a(info->error == DB_SUCCESS);
++			bpi_task_merge(buf_pool, info);
++			buf_pool->curr_size += info->chunk_size;
++		}
++
++		ut_d(ut_list_validate(buf_pool->free));
++		ut_d(ut_list_validate(rw_lock_list));
+ 
+ 		buf_pool->instance_no = instance_no;
+ 		buf_pool->read_ahead_area =
+@@ -2051,18 +2244,25 @@ buf_pool_init(
+ 
+ 	buf_chunk_map_reg = UT_NEW_NOKEY(buf_pool_chunk_map_t());
+ 
++	buf_pool_thread_init();
++
+ 	for (i = 0; i < n_instances; i++) {
+ 		buf_pool_t*	ptr	= &buf_pool_ptr[i];
+ 
+ 		if (buf_pool_init_instance(ptr, size, i) != DB_SUCCESS) {
+-
+ 			/* Free all the instances created so far. */
+ 			buf_pool_free(i);
++			buf_pool_thread_reset();
++			buf_pool_thread_end();
+ 
+ 			return(DB_ERROR);
+ 		}
++
++		buf_pool_thread_reset();
+ 	}
+ 
++	buf_pool_thread_end();
++
+ 	buf_chunk_map_ref = buf_chunk_map_reg;
+ 
+ 	buf_pool_set_sizes();
+diff --git storage/innobase/include/buf0buf.h storage/innobase/include/buf0buf.h
+index 997b471f52b..9fded1b7dff 100644
+--- storage/innobase/include/buf0buf.h
++++ storage/innobase/include/buf0buf.h
+@@ -2256,6 +2256,36 @@ struct buf_pool_t{
+ 	} io_buf;
+ };
+ 
++/** Buffer Pool Initialization with multi-threading */
++typedef UT_LIST_BASE_NODE_T(buf_page_t)	buf_page_list_t;
++
++struct bpi_thread_info_t {
++	buf_chunk_t* chunk_ptr;
++	ulint n_chunks;
++	ulint chunk_size;
++	dberr_t error;
++	ulint init_n_chunks;
++
++	buf_page_list_t free;
++	rw_lock_list_t rw_lock_list;
++};
++
++struct bpi_task_t {
++	uint32 n_threads;
++	uint32 n_executions;
++	os_event_t curr_task;
++	os_event_t next_task;
++	os_event_t end_task;
++
++	bpi_thread_info_t* thread_info;
++
++	/* common info */
++	buf_pool_t* buf_pool;
++	dberr_t error;
++	ulint instance_no;
++	ulint chunk_size;
++};
++
+ /** Print the given buf_pool_t object.
+ @param[in,out]	out		the output stream
+ @param[in]	buf_pool	the buf_pool_t object to be printed
+diff --git storage/innobase/include/sync0rw.h storage/innobase/include/sync0rw.h
+index bf47cb8fe88..f4c0073eca2 100644
+--- storage/innobase/include/sync0rw.h
++++ storage/innobase/include/sync0rw.h
+@@ -123,10 +123,14 @@ if MySQL performance schema is enabled and "UNIV_PFS_RWLOCK" is
+ defined, the rwlock are instrumented with performance schema probes. */
+ # ifdef UNIV_DEBUG
+ #  define rw_lock_create(K, L, level)				\
+-	rw_lock_create_func((L), (level), __FILE__, __LINE__)
++	rw_lock_create_func((L), (level), 0, __FILE__, __LINE__)
++#  define rw_lock_create_local(K, L, level, R)				\
++	rw_lock_create_func((L), (level), R, __FILE__, __LINE__)
+ # else /* UNIV_DEBUG */
+ #  define rw_lock_create(K, L, level)				\
+-	rw_lock_create_func((L), __FILE__, __LINE__)
++	rw_lock_create_func((L), 0, __FILE__, __LINE__)
++#  define rw_lock_create_local(K, L, level, R)				\
++	rw_lock_create_func((L), R, __FILE__, __LINE__)
+ # endif	/* UNIV_DEBUG */
+ 
+ /**************************************************************//**
+@@ -204,17 +208,22 @@ unlocking, not the corresponding function. */
+ #  define rw_lock_x_unlock_gen(L, P)	rw_lock_x_unlock_func(L)
+ # endif
+ 
+-# define rw_lock_free(M)		rw_lock_free_func(M)
++# define rw_lock_free(M)			rw_lock_free_func(M, 0)
++# define rw_lock_free_local(M, R)	rw_lock_free_func(M, R)
+ 
+ #else /* !UNIV_PFS_RWLOCK */
+ 
+ /* Following macros point to Performance Schema instrumented functions. */
+ # ifdef UNIV_DEBUG
+ #   define rw_lock_create(K, L, level)				\
+-	pfs_rw_lock_create_func((K), (L), (level), __FILE__, __LINE__)
++	pfs_rw_lock_create_func((K), (L), (level), 0, __FILE__, __LINE__)
++#   define rw_lock_create_local(K, L, level, R)				\
++	pfs_rw_lock_create_func((K), (L), (level), R, __FILE__, __LINE__)
+ # else	/* UNIV_DEBUG */
+ #  define rw_lock_create(K, L, level)				\
+-	pfs_rw_lock_create_func((K), (L), __FILE__, __LINE__)
++	pfs_rw_lock_create_func((K), (L), 0, __FILE__, __LINE__)
++#  define rw_lock_create_local(K, L, level, R)				\
++	pfs_rw_lock_create_func((K), (L), R, __FILE__, __LINE__)
+ # endif	/* UNIV_DEBUG */
+ 
+ /******************************************************************
+@@ -280,7 +289,8 @@ unlocking, not the corresponding function. */
+ #  define rw_lock_x_unlock_gen(L, P)	pfs_rw_lock_x_unlock_func(L)
+ # endif
+ 
+-# define rw_lock_free(M)		pfs_rw_lock_free_func(M)
++# define rw_lock_free(M)			pfs_rw_lock_free_func(M, 0)
++# define rw_lock_free_local(M, R)	pfs_rw_lock_free_func(M, R)
+ 
+ #endif /* !UNIV_PFS_RWLOCK */
+ 
+@@ -299,16 +309,22 @@ rw_lock_create_func(
+ #ifdef UNIV_DEBUG
+ 	latch_level_t	level,		/*!< in: level */
+ #endif /* UNIV_DEBUG */
++	rw_lock_list_t* local_rw_lock_list,		/*!< in: rw_lock_list for multithreaded init */
+ 	const char*	cfile_name,	/*!< in: file name where created */
+ 	unsigned	cline);		/*!< in: file line where created */
+ /******************************************************************//**
++Added for Project 4 */
++void
++rw_lock_list_merge(rw_lock_list_t* list);
++/******************************************************************//**
+ Calling this function is obligatory only if the memory buffer containing
+ the rw-lock is freed. Removes an rw-lock object from the global list. The
+ rw-lock is checked to be in the non-locked state. */
+ void
+ rw_lock_free_func(
+ /*==============*/
+-	rw_lock_t*	lock);		/*!< in/out: rw-lock */
++	rw_lock_t*	lock,		/*!< in/out: rw-lock */
++	rw_lock_list_t* local_rw_lock_list);
+ #ifdef UNIV_DEBUG
+ /******************************************************************//**
+ Checks that the rw-lock has been initialized and that there are no
+@@ -693,6 +709,7 @@ pfs_rw_lock_create_func(
+ #ifdef UNIV_DEBUG
+ 	latch_level_t	level,		/*!< in: level */
+ #endif /* UNIV_DEBUG */
++	rw_lock_list_t* local_rw_lock_list,		/*!< in: rw_lock_list for multithreaded init */
+ 	const char*	cfile_name,	/*!< in: file name where created */
+ 	unsigned	cline);		/*!< in: file line where created */
+ 
+@@ -838,7 +855,8 @@ UNIV_INLINE
+ void
+ pfs_rw_lock_free_func(
+ /*==================*/
+-	rw_lock_t*	lock);	/*!< in: rw-lock */
++	rw_lock_t*	lock,	/*!< in: rw-lock */
++	rw_lock_list_t* local_rw_lock_list);
+ #endif  /* UNIV_PFS_RWLOCK */
+ 
+ #include "sync0rw.ic"
+diff --git storage/innobase/include/sync0rw.ic storage/innobase/include/sync0rw.ic
+index a1bbf719b7d..c14c7f7f957 100644
+--- storage/innobase/include/sync0rw.ic
++++ storage/innobase/include/sync0rw.ic
+@@ -505,6 +505,7 @@ pfs_rw_lock_create_func(
+ # ifdef UNIV_DEBUG
+ 	latch_level_t	level,		/*!< in: level */
+ # endif /* UNIV_DEBUG */
++	rw_lock_list_t* local_rw_lock_list,		/*!< in: rw_lock_list for multithreaded init */
+ 	const char*	cfile_name,	/*!< in: file name where created */
+ 	unsigned	cline)		/*!< in: file line where created */
+ {
+@@ -518,6 +519,7 @@ pfs_rw_lock_create_func(
+ #ifdef UNIV_DEBUG
+ 			    level,
+ #endif /* UNIV_DEBUG */
++			    local_rw_lock_list,
+ 			    cfile_name,
+ 			    cline);
+ }
+@@ -607,14 +609,15 @@ UNIV_INLINE
+ void
+ pfs_rw_lock_free_func(
+ /*==================*/
+-	rw_lock_t*	lock)	/*!< in: pointer to rw-lock */
++	rw_lock_t*	lock,	/*!< in: pointer to rw-lock */
++	rw_lock_list_t* local_rw_lock_list)
+ {
+ 	if (lock->pfs_psi != NULL) {
+ 		PSI_RWLOCK_CALL(destroy_rwlock)(lock->pfs_psi);
+ 		lock->pfs_psi = NULL;
+ 	}
+ 
+-	rw_lock_free_func(lock);
++	rw_lock_free_func(lock, local_rw_lock_list);
+ }
+ /******************************************************************//**
+ Performance schema instrumented wrap function for rw_lock_s_lock_func()
+diff --git storage/innobase/include/ut0lst.h storage/innobase/include/ut0lst.h
+index 9a5f3059826..c940cee3a5d 100644
+--- storage/innobase/include/ut0lst.h
++++ storage/innobase/include/ut0lst.h
+@@ -388,6 +388,47 @@ ut_list_remove(
+ 		GenericGetNode<typename List::elem_type>(list.node));
+ }
+ 
++/*******************************************************************//**
++[Added for Project 4]
++Merge two linked list.
++@param src the source list
++@param dest the target list */
++template <typename List>
++void
++ut_list_merge(
++	List&			src,
++	List&			dest)
++{
++	UT_LIST_IS_INITIALISED(src);
++	UT_LIST_IS_INITIALISED(dest);
++
++	if (src.start != 0) {
++		typename List::node_type&	start_node =
++			src.start->*src.node;
++		start_node.prev = dest.end;
++	}
++	
++	if (dest.end != 0) {
++		typename List::node_type& 	end_node =
++			dest.end->*dest.node;
++		end_node.next = src.start;
++	}
++
++	dest.end = src.end;
++
++	if (dest.start == 0) {
++		dest.start = src.start;
++	}
++
++	dest.count += src.count;
++
++	src.count = 0;
++	src.start = 0;
++	src.end = 0;
++}
++
++#define UT_LIST_MERGE(SRC, DEST)	ut_list_merge(SRC, DEST)
++
+ /*******************************************************************//**
+ Removes a node from a two-way linked list.
+ @param LIST the base node (not a pointer to it)
+diff --git storage/innobase/srv/srv0start.cc storage/innobase/srv/srv0start.cc
+index 4c80425e6dd..90c4386f478 100644
+--- storage/innobase/srv/srv0start.cc
++++ storage/innobase/srv/srv0start.cc
+@@ -1391,6 +1391,7 @@ dberr_t srv_start(bool create_new_db)
+ 		chunk_unit = 'M';
+ 	}
+ 
++	auto stime = std::chrono::high_resolution_clock::now();
+ 	ib::info() << "Initializing buffer pool, total size = "
+ 		<< size << unit << ", instances = " << srv_buf_pool_instances
+ 		<< ", chunk size = " << chunk_size << chunk_unit;
+@@ -1404,6 +1405,9 @@ dberr_t srv_start(bool create_new_db)
+ 	}
+ 
+ 	ib::info() << "Completed initialization of buffer pool";
++	auto etime = std::chrono::high_resolution_clock::now();
++	std::chrono::duration<double, std::milli> elapsed = etime - stime;
++	ib::info() << "Total elapsed time: " << elapsed.count() << " ms";
+ 
+ #ifdef UNIV_DEBUG
+ 	/* We have observed deadlocks with a 5MB buffer pool but
+diff --git storage/innobase/sync/sync0rw.cc storage/innobase/sync/sync0rw.cc
+index 2795fc902fc..9d85115a629 100644
+--- storage/innobase/sync/sync0rw.cc
++++ storage/innobase/sync/sync0rw.cc
+@@ -194,6 +194,7 @@ rw_lock_create_func(
+ #ifdef UNIV_DEBUG
+ 	latch_level_t	level,		/*!< in: level */
+ #endif /* UNIV_DEBUG */
++	rw_lock_list_t* local_rw_lock_list,		/*!< in: rw_lock_list for multithreaded init */
+ 	const char*	cfile_name,	/*!< in: file name where created */
+ 	unsigned	cline)		/*!< in: file line where created */
+ {
+@@ -237,8 +238,20 @@ rw_lock_create_func(
+ 
+ 	lock->is_block_lock = 0;
+ 
++	if (local_rw_lock_list == NULL) {
++		mutex_enter(&rw_lock_list_mutex);
++		UT_LIST_ADD_FIRST(rw_lock_list, lock);
++		mutex_exit(&rw_lock_list_mutex);
++	} else {
++		UT_LIST_ADD_FIRST(*local_rw_lock_list, lock);
++	}
++}
++
++void
++rw_lock_list_merge(rw_lock_list_t* list)
++{
+ 	mutex_enter(&rw_lock_list_mutex);
+-	UT_LIST_ADD_FIRST(rw_lock_list, lock);
++	UT_LIST_MERGE(*list, rw_lock_list);
+ 	mutex_exit(&rw_lock_list_mutex);
+ }
+ 
+@@ -249,7 +262,8 @@ rw-lock is checked to be in the non-locked state. */
+ void
+ rw_lock_free_func(
+ /*==============*/
+-	rw_lock_t*	lock)	/*!< in/out: rw-lock */
++	rw_lock_t*	lock,	/*!< in/out: rw-lock */
++	rw_lock_list_t* local_rw_lock_list)
+ {
+ 	ut_ad(rw_lock_validate(lock));
+ 	ut_a(lock->lock_word.load(std::memory_order_relaxed) == X_LOCK_DECR);
+@@ -260,7 +274,11 @@ rw_lock_free_func(
+ 
+ 	os_event_destroy(lock->wait_ex_event);
+ 
+-	UT_LIST_REMOVE(rw_lock_list, lock);
++	if (local_rw_lock_list == NULL) {
++		UT_LIST_REMOVE(rw_lock_list, lock);
++	} else {
++		UT_LIST_REMOVE(*local_rw_lock_list, lock);
++	}
+ 
+ 	mutex_exit(&rw_lock_list_mutex);
+ }
