@@ -7,9 +7,9 @@ sysbench \
   --mysql-user=$USER \
   --mysql-db=sbtest \
   --report-interval=1 \
-  --threads=10 \
-  --table-size=10000 \
-  --tables=1 \
+  --threads=8 \
+  --table-size=1000000 \
+  --tables=10 \
   --time=60 \
   --db-driver=mysql \
   /usr/share/sysbench/oltp_read_write.lua \
