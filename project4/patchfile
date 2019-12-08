@@ -1,5 +1,5 @@
 diff --git storage/innobase/buf/buf0buf.cc storage/innobase/buf/buf0buf.cc
-index 6a2bc34c767..650d6b60f71 100644
+index 6a2bc34c767..8078d6e18b9 100644
 --- storage/innobase/buf/buf0buf.cc
 +++ storage/innobase/buf/buf0buf.cc
 @@ -310,6 +310,10 @@ static const ulint	BUF_READ_AHEAD_PAGES = 64;
@@ -241,7 +241,7 @@ index 6a2bc34c767..650d6b60f71 100644
  /********************************************************************//**
  Initialize a buffer pool instance.
  @return DB_SUCCESS if all goes well. */
-@@ -1857,26 +2008,65 @@ buf_pool_init_instance(
+@@ -1857,26 +2008,61 @@ buf_pool_init_instance(
  		buf_pool->curr_size = 0;
  		chunk = buf_pool->chunks;
  
@@ -254,21 +254,17 @@ index 6a2bc34c767..650d6b60f71 100644
 +		bpi_task->chunk_size = chunk_size;
 +
 +		ulint n_thread_chunks = buf_pool->n_chunks / bpi_task->n_threads;
-+		if (buf_pool->n_chunks % bpi_task->n_threads != 0) {
-+			n_thread_chunks += 1;
-+		}
++		buf_chunk_t* prev_chunk_ptr = buf_pool->chunks;
 +
 +		for (i = 0; i < bpi_task->n_threads; i++) {
 +			bpi_thread_info_t* info = bpi_task->thread_info + i;
-+			buf_chunk_t* last_chunk_ptr = buf_pool->chunks + buf_pool->n_chunks;
-+			info->chunk_ptr = buf_pool->chunks + (i * n_thread_chunks);
-+			if (info->chunk_ptr >= last_chunk_ptr) {
-+				info->chunk_ptr = last_chunk_ptr;
++			info->n_chunks = n_thread_chunks;
++			if (i < buf_pool->n_chunks % bpi_task->n_threads) {
++				info->n_chunks++;
 +			}
-+			info->n_chunks = last_chunk_ptr - info->chunk_ptr;
-+			if (info->n_chunks > n_thread_chunks) {
-+				info->n_chunks = n_thread_chunks;
-+			}
++
++			info->chunk_ptr = prev_chunk_ptr;
++			prev_chunk_ptr = info->chunk_ptr + info->n_chunks;
 +		}
 +
 +		os_event_set(bpi_task->curr_task);
@@ -319,7 +315,7 @@ index 6a2bc34c767..650d6b60f71 100644
  
  		buf_pool->instance_no = instance_no;
  		buf_pool->read_ahead_area =
-@@ -2051,18 +2241,25 @@ buf_pool_init(
+@@ -2051,18 +2237,25 @@ buf_pool_init(
  
  	buf_chunk_map_reg = UT_NEW_NOKEY(buf_pool_chunk_map_t());
  
@@ -525,10 +521,10 @@ index a1bbf719b7d..c14c7f7f957 100644
  /******************************************************************//**
  Performance schema instrumented wrap function for rw_lock_s_lock_func()
 diff --git storage/innobase/include/ut0lst.h storage/innobase/include/ut0lst.h
-index 9a5f3059826..c940cee3a5d 100644
+index 9a5f3059826..d7bf7ab7417 100644
 --- storage/innobase/include/ut0lst.h
 +++ storage/innobase/include/ut0lst.h
-@@ -388,6 +388,47 @@ ut_list_remove(
+@@ -388,6 +388,49 @@ ut_list_remove(
  		GenericGetNode<typename List::elem_type>(list.node));
  }
  
@@ -558,7 +554,9 @@ index 9a5f3059826..c940cee3a5d 100644
 +		end_node.next = src.start;
 +	}
 +
-+	dest.end = src.end;
++	if (src.end != 0) {
++		dest.end = src.end;
++	}
 +
 +	if (dest.start == 0) {
 +		dest.start = src.start;
@@ -599,7 +597,7 @@ index 4c80425e6dd..90c4386f478 100644
  #ifdef UNIV_DEBUG
  	/* We have observed deadlocks with a 5MB buffer pool but
 diff --git storage/innobase/sync/sync0rw.cc storage/innobase/sync/sync0rw.cc
-index 2795fc902fc..9d85115a629 100644
+index 2795fc902fc..e4ea92782f8 100644
 --- storage/innobase/sync/sync0rw.cc
 +++ storage/innobase/sync/sync0rw.cc
 @@ -194,6 +194,7 @@ rw_lock_create_func(
@@ -610,7 +608,7 @@ index 2795fc902fc..9d85115a629 100644
  	const char*	cfile_name,	/*!< in: file name where created */
  	unsigned	cline)		/*!< in: file line where created */
  {
-@@ -237,8 +238,20 @@ rw_lock_create_func(
+@@ -237,8 +238,21 @@ rw_lock_create_func(
  
  	lock->is_block_lock = 0;
  
@@ -626,13 +624,14 @@ index 2795fc902fc..9d85115a629 100644
 +void
 +rw_lock_list_merge(rw_lock_list_t* list)
 +{
++	if (list->start == 0) return;
  	mutex_enter(&rw_lock_list_mutex);
 -	UT_LIST_ADD_FIRST(rw_lock_list, lock);
 +	UT_LIST_MERGE(*list, rw_lock_list);
  	mutex_exit(&rw_lock_list_mutex);
  }
  
-@@ -249,7 +262,8 @@ rw-lock is checked to be in the non-locked state. */
+@@ -249,7 +263,8 @@ rw-lock is checked to be in the non-locked state. */
  void
  rw_lock_free_func(
  /*==============*/
@@ -642,7 +641,7 @@ index 2795fc902fc..9d85115a629 100644
  {
  	ut_ad(rw_lock_validate(lock));
  	ut_a(lock->lock_word.load(std::memory_order_relaxed) == X_LOCK_DECR);
-@@ -260,7 +274,11 @@ rw_lock_free_func(
+@@ -260,7 +275,11 @@ rw_lock_free_func(
  
  	os_event_destroy(lock->wait_ex_event);
  
